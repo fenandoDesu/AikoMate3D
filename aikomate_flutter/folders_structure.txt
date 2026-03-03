@@ -1,0 +1,111 @@
+aikomate_flutter/
+│
+├── android/                          # Android-specific configs
+│   └── app/src/main/
+│       ├── jniLibs/                  # whisper.cpp compiled .so files per ABI
+│       │   ├── arm64-v8a/
+│       │   └── armeabi-v7a/
+│       └── AndroidManifest.xml       # mic, internet permissions
+│
+├── ios/                              # iOS-specific configs
+│   └── Runner/
+│       ├── Info.plist                # mic permissions, background audio
+│       └── Frameworks/               # whisper.cpp compiled .xcframework
+│
+├── assets/
+│   ├── web/                          # Your existing JS code (WebView content)
+│   │   ├── index.html
+│   │   ├── src/
+│   │   │   ├── renderer/             # three.js / WebXR logic
+│   │   │   │   ├── scene.js
+│   │   │   │   ├── vrm-loader.js
+│   │   │   │   └── webxr.js
+│   │   │   ├── bridge/               # JS ↔ Flutter communication
+│   │   │   │   └── flutter-bridge.js
+│   │   │   └── utils/
+│   │   └── libs/                     # three.js, gltf, VRM vendor files
+│   │
+│   └── images/                       # App icons, splash, UI assets
+│
+├── lib/
+│   ├── main.dart
+│   │
+│   ├── core/                         # App-wide foundational code
+│   │   ├── constants.dart            # API URLs, config values
+│   │   ├── router.dart               # App navigation/routing
+│   │   └── theme.dart                # Colors, typography
+│   │
+│   ├── features/                     # Feature-first organization
+│   │   │
+│   │   ├── auth/                     # User authentication
+│   │   │   ├── screens/
+│   │   │   │   ├── login_screen.dart
+│   │   │   │   └── register_screen.dart
+│   │   │   ├── providers/
+│   │   │   │   └── auth_provider.dart
+│   │   │   └── services/
+│   │   │       └── auth_service.dart
+│   │   │
+│   │   ├── character/                # VRM model management
+│   │   │   ├── screens/
+│   │   │   │   └── character_select_screen.dart
+│   │   │   ├── providers/
+│   │   │   │   └── character_provider.dart
+│   │   │   └── services/
+│   │   │       └── character_service.dart  # model download/cache
+│   │   │
+│   │   ├── viewer/                   # The core WebView + 3D experience
+│   │   │   ├── screens/
+│   │   │   │   └── viewer_screen.dart
+│   │   │   ├── controllers/
+│   │   │   │   └── webview_controller.dart
+│   │   │   └── bridge/
+│   │   │       └── js_bridge.dart    # all JS ↔ Dart message handling
+│   │   │
+│   │   ├── voice/                    # Audio pipeline
+│   │   │   ├── providers/
+│   │   │   │   └── voice_provider.dart
+│   │   │   └── services/
+│   │   │       ├── audio_recorder.dart     # mic capture
+│   │   │       ├── vad_service.dart        # Silero ONNX
+│   │   │       └── whisper_service.dart    # whisper.cpp FFI
+│   │   │
+│   │   ├── chat/                     # Conversation UI
+│   │   │   ├── screens/
+│   │   │   │   └── chat_screen.dart
+│   │   │   ├── widgets/
+│   │   │   │   ├── message_bubble.dart
+│   │   │   │   └── input_bar.dart
+│   │   │   └── providers/
+│   │   │       └── chat_provider.dart
+│   │   │
+│   │   └── settings/                 # Settings/config
+│   │       ├── screens/
+│   │       │   └── settings_screen.dart
+│   │       └── providers/
+│   │           └── settings_provider.dart
+│   │
+│   ├── shared/                       # Reusable across features
+│   │   ├── widgets/                  # Common UI components
+│   │   ├── models/                   # Shared data models
+│   │   └── services/
+│   │       └── api_service.dart      # Your existing API calls
+│   │
+│   └── native/                       # FFI bindings
+│       ├── whisper_ffi.dart          # whisper.cpp bindings
+│       └── onnx_ffi.dart             # ONNX runtime bindings
+│
+├── models/                           # Downloaded at runtime, NOT bundled
+│   └── .gitkeep                      # empty, filled on first launch
+│                                     # whisper model (~150mb)
+│                                     # silero VAD (~2mb)
+│                                     # VRM models (user's characters)
+│
+├── test/
+│   ├── unit/
+│   │   ├── vad_service_test.dart
+│   │   └── whisper_service_test.dart
+│   └── widget/
+│       └── viewer_screen_test.dart
+│
+└── pubspec.yaml
