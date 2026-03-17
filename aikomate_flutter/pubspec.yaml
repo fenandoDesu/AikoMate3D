@@ -67,6 +67,7 @@ flutter:
     - assets/web/models/UltimateLoverH1.vrm
     - assets/web/src/
     - assets/web/src/renderer/
+    - assets/web/src/renderer/animations/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
