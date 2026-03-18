@@ -1,6 +1,4 @@
 import * as THREE from "../../../libs/three.module.js";
-import { GLTFLoader } from "../../../libs/GLTFLoader.js";
-import { VRMLoaderPlugin, VRMUtils } from "../../../libs/three-vrm.module.js";
 
 const deg = THREE.MathUtils.degToRad;
 let poseBuffer = {};
@@ -52,7 +50,6 @@ function getPoseBaseQuat(bone) {
 }
 
 export function setBonesToIdle(t, vrmFactor, dt = 1 / 60) {
-  console.log('idling')
   let yawLimit = 0.6, pitchLimit = 0.4;
   // hipSwing(vrm, t, body)
   // const yaw = THREE.MathUtils.clamp(mouse.x * yawLimit, -yawLimit, yawLimit);

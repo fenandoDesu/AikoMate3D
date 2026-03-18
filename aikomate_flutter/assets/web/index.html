@@ -1,17 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AikoMate</title>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; overflow: hidden; background: #ffffff; }
-      canvas { display: block; width: 100% !important; height: 100% !important; }
-    </style>
-  </head>
-  <body>
-    <canvas id="c"></canvas>
-    <script type="module" src="src/renderer/viewer.js"></script>
-  </body>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AikoMate</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    #ar-prompt {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.5);
+      cursor: pointer;
+    }
+
+    #ar-prompt.visible {
+      display: flex;
+    }
+
+    #ar-prompt-text {
+      color: white;
+      font-size: 20px;
+      font-family: sans-serif;
+      text-align: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 16px;
+      pointer-events: none;
+    }
+
+    #tap-hint {
+      position: fixed;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 10px 24px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-family: sans-serif;
+      display: none;
+      z-index: 999;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="c"></canvas>
+
+  <!-- AR tap-to-start overlay -->
+  <div id="ar-prompt">
+    <div id="ar-prompt-text">
+      Tap anywhere to start AR
+    </div>
+  </div>
+
+  <div id="tap-hint">Tap a surface to place the avatar</div>
+
+  <script type="module" src="src/renderer/viewer.js"></script>
+
+  <script>
+    // Called by Flutter after VRM loads
+    function showARPrompt() {
+      const prompt = document.getElementById('ar-prompt');
+      if (prompt) prompt.classList.add('visible');
+    }
+
+    // User taps the overlay → satisfies gesture requirement → starts AR
+    document.getElementById('ar-prompt').addEventListener('click', async () => {
+      document.getElementById('ar-prompt').classList.remove('visible');
+
+      // Wait until viewer.js module has exported startARSession
+      let attempts = 0;
+      while (!window.startARSession && attempts < 20) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+      }
+
+      if (window.startARSession) {
+        window.startARSession();
+      } else {
+        console.error("startARSession not available after waiting");
+      }
+    });
+  </script>
+</body>
+
 </html>

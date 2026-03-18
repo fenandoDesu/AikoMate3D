@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'features/viewer/screens/viewer_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const AikoMateApp());
 }
 

@@ -1,32 +1,51 @@
 import * as THREE from "../../libs/three.module.js";
 import { GLTFLoader } from "../../libs/GLTFLoader.js";
 import { VRMLoaderPlugin, VRMUtils } from "../../libs/three-vrm.module.js";
-import { setBonesToIdle, initPoseBuffer, applyPoseBuffer } from "./animations/animations.js"
+import { setBonesToIdle, initPoseBuffer, applyPoseBuffer } from "./animations/animations.js";
 
-// ─── Renderer ───────────────────────────────────────────────────────────────
+// ─── Mode Detection ──────────────────────────────────────────────────────────
+const urlParams = new URLSearchParams(window.location.search);
+const mode = urlParams.get('mode'); // 'normal', 'ar', 'ar-overlay'
+const isAR = mode === 'ar' || mode === 'ar-overlay';
+const isOverlay = mode === 'ar-overlay';
+
+// ─── Renderer ────────────────────────────────────────────────────────────────
 const canvas = document.getElementById("c");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
-  preserveDrawingBuffer: true
+  preserveDrawingBuffer: true,
+  alpha: isAR,
 });
 
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setClearColor(0xffffff, 1);
+renderer.xr.enabled = isAR && !isOverlay; // WebXR only if NOT overlay mode
+
+if (!isAR) {
+  renderer.setClearColor(0xffffff, 1);
+} else {
+  renderer.setClearColor(0x000000, 0); // transparent for both ar modes
+}
+
+// ─── Transparent background for overlay mode ─────────────────────────────────
+if (isOverlay) {
+  document.body.style.background = 'transparent';
+  document.documentElement.style.background = 'transparent';
+}
 
 // ─── Scene ───────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xffffff);
+if (!isAR) scene.background = new THREE.Color(0xffffff);
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(
   28,
   window.innerWidth / window.innerHeight,
   0.1,
-  10
+  100
 );
-camera.position.set(0, 1.45, 2.7);
+camera.position.set(0, 1.45, 1.7);
 camera.lookAt(0, 1.4, 0);
 
 // ─── Lights ──────────────────────────────────────────────────────────────────
@@ -44,10 +63,23 @@ window.addEventListener("resize", () => {
 
 // ─── VRM State ───────────────────────────────────────────────────────────────
 let currentVRM = null;
-let vrmVersion = null;
-let clock = new THREE.Clock();
-let body = {}
 let vrmFactor = 1;
+const clock = new THREE.Clock();
+let elapsedTime = 0;
+
+// ─── AR State (WebXR path — unused in overlay mode) ──────────────────────────
+let xrSession = null;
+let xrHitTestSource = null;
+let xrRefSpace = null;
+let avatarPlaced = false;
+
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.1, 0.11, 32).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xffffff })
+);
+reticle.visible = false;
+reticle.matrixAutoUpdate = false;
+scene.add(reticle);
 
 // ─── VRM Version Detection ───────────────────────────────────────────────────
 function detectVRMVersion(gltf) {
@@ -58,61 +90,44 @@ function detectVRMVersion(gltf) {
 }
 
 // ─── Load VRM ────────────────────────────────────────────────────────────────
-function createVRMLoader() {
-  const loader = new GLTFLoader();
-  loader.register((parser) => new VRMLoaderPlugin(parser));
-  return loader;
-}
-
-function notifyFlutterLoaded() {
-  const payload = JSON.stringify({ event: "vrmLoaded", version: vrmVersion });
-  window.flutter_inappwebview.callHandler("FlutterBridge", payload);
-  if (window.FlutterBridge) {
-    window.FlutterBridge.postMessage(payload);
-  }
-}
-
-function notifyFlutterError(error) {
-  const payload = JSON.stringify({
-    event: "vrmError",
-    error: String(error)
-  });
-  window.flutter_inappwebview.callHandler("FlutterBridge", payload);
-  if (window.FlutterBridge) {
-    window.FlutterBridge.postMessage(payload);
-  }
-}
-
-function loadVRMFromUrl(url) {
+function loadVRM(url) {
   if (currentVRM) {
     scene.remove(currentVRM.scene);
     VRMUtils.deepDispose(currentVRM.scene);
     currentVRM = null;
   }
 
-  const loader = createVRMLoader();
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
 
   loader.load(
     url,
     (gltf) => {
-      vrmVersion = detectVRMVersion(gltf);
-      vrmFactor = vrmVersion === "VRM0" ? -1 : 1;
       const vrm = gltf.userData.vrm;
       currentVRM = vrm;
-      initPoseBuffer(vrm.humanoid.rawHumanBones);
-      setBones(vrm);
-      initPoseBuffer(body);
+      const vrmVersion = detectVRMVersion(gltf);
+      vrmFactor = vrmVersion === "VRM0" ? -1 : 1;
 
       VRMUtils.removeUnnecessaryVertices(vrm.scene);
       VRMUtils.removeUnnecessaryJoints(vrm.scene);
 
-      if (vrmVersion === "VRM0") {
-        VRMUtils.rotateVRM0(vrm);
-      }
+      if (vrmVersion === "VRM0") VRMUtils.rotateVRM0(vrm);
+
+      // In AR/overlay mode: hide until placed
+      if (isAR) vrm.scene.visible = false;
 
       scene.add(vrm.scene);
+
+      const bones = {};
+      for (const [name, bone] of Object.entries(vrm.humanoid.rawHumanBones)) {
+        bones[name] = bone?.node;
+      }
+      initPoseBuffer(bones);
+
       console.log(`VRM loaded: ${vrmVersion}`);
-      notifyFlutterLoaded();
+      window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({
+        event: 'vrmLoaded', vrmVersion
+      }));
     },
     (progress) => {
       const percent = Math.round((progress.loaded / progress.total) * 100);
@@ -120,270 +135,119 @@ function loadVRMFromUrl(url) {
     },
     (loadError) => {
       console.error("VRM load failed:", loadError);
-      notifyFlutterError(loadError);
+      window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({
+        event: 'vrmError', error: String(loadError)
+      }));
     }
   );
 }
 
-const deg = THREE.MathUtils.degToRad;
+// ─── Flutter Bridge ──────────────────────────────────────────────────────────
+window.onFlutterMessage = (jsonString) => {
+  const data = JSON.parse(jsonString);
 
-function loadVRMFromBuffer(arrayBuffer, fileName) {
-  if (currentVRM) {
-    scene.remove(currentVRM.scene);
-    VRMUtils.deepDispose(currentVRM.scene);
-    currentVRM = null;
+  if (data.command === 'loadVRM') {
+    loadVRM(data.url);
   }
 
-  const loader = createVRMLoader();
-  const basePath = fileName ? fileName.replace(/[^/]*$/, "") : "";
-  loader.parse(
-    arrayBuffer,
-    basePath,
-    (gltf) => {
-      vrmVersion = detectVRMVersion(gltf);
-      vrmFactor = vrmVersion === "VRM0" ? -1 : 1;
-      const vrm = gltf.userData.vrm;
-      currentVRM = vrm;
-      initPoseBuffer(vrm.humanoid.rawHumanBones);
-      setBones(vrm);
-      initPoseBuffer(body);
-
-      VRMUtils.removeUnnecessaryVertices(vrm.scene);
-      VRMUtils.removeUnnecessaryJoints(vrm.scene);
-
-      if (vrmVersion === "VRM0") {
-        VRMUtils.rotateVRM0(vrm);
-      }
-
-      scene.add(vrm.scene);
-      console.log(`VRM loaded: ${vrmVersion}`);
-      
-      notifyFlutterLoaded();
-    },
-    (parseError) => {
-      console.error("VRM parse failed:", parseError);
-      notifyFlutterError(parseError);
+  // ARCore overlay: Flutter tells us where to place the model
+  if (data.command === 'placeAR') {
+    if (currentVRM) {
+      currentVRM.scene.position.set(data.x, data.y, data.z);
+      currentVRM.scene.visible = true;
+      avatarPlaced = true;
     }
-  );
-}
-
-function base64ToArrayBuffer(base64) {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i += 1) {
-    bytes[i] = binaryString.charCodeAt(i);
   }
-  return bytes.buffer;
-}
+};
 
-function setBones(vrm) {
-  const hips = vrm.humanoid.getNormalizedBoneNode('hips');
-  const spine = vrm.humanoid.getNormalizedBoneNode('spine');
-  const neck = vrm.humanoid.getNormalizedBoneNode('neck');
-  const head = vrm.humanoid.getNormalizedBoneNode('head');
+// ─── WebXR AR (only used in 'ar' mode, not 'ar-overlay') ─────────────────────
+async function startAR() {
+  if (isOverlay) {
+    console.log("startAR skipped — using ARCore overlay mode");
+    return;
+  }
 
-  const chest = vrm.humanoid.getNormalizedBoneNode("chest");
-  const upperChest = vrm.humanoid.getNormalizedBoneNode("upperChest");
+  console.log("startAR called");
+  console.log("navigator.xr:", !!navigator.xr);
 
-  const leftShoulder = vrm.humanoid.getNormalizedBoneNode('leftShoulder');
-  const rightShoulder = vrm.humanoid.getNormalizedBoneNode('rightShoulder');
+  if (!navigator.xr) {
+    console.error("WebXR not available");
+    return;
+  }
 
-  const leftUpperArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
-  const rightUpperArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
-  const rightLowerArm = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
-  const leftLowerArm = vrm.humanoid.getNormalizedBoneNode('leftLowerArm');
+  const supported = await navigator.xr.isSessionSupported('immersive-ar');
+  if (!supported) {
+    console.error("Immersive AR not supported on this device");
+    return;
+  }
 
-  const leftUpperLeg = vrm.humanoid.getNormalizedBoneNode('leftUpperLeg');
-  const rightUpperLeg = vrm.humanoid.getNormalizedBoneNode('rightUpperLeg');
-  const leftLowerLeg = vrm.humanoid.getNormalizedBoneNode('leftLowerLeg');
-  const rightLowerLeg = vrm.humanoid.getNormalizedBoneNode('rightLowerLeg');
+  xrSession = await navigator.xr.requestSession('immersive-ar', {
+    requiredFeatures: ['hit-test', 'dom-overlay'],
+    domOverlay: { root: document.body }
+  });
 
-  const leftFoot = vrm.humanoid.getNormalizedBoneNode('leftFoot');
-  const rightFoot = vrm.humanoid.getNormalizedBoneNode('rightFoot');
+  await renderer.xr.setSession(xrSession);
+  xrRefSpace = await xrSession.requestReferenceSpace('local');
+  const viewerSpace = await xrSession.requestReferenceSpace('viewer');
+  xrHitTestSource = await xrSession.requestHitTestSource({ space: viewerSpace });
 
-  const leftHand = vrm.humanoid.getNormalizedBoneNode('leftHand');
-  const rightHand = vrm.humanoid.getNormalizedBoneNode('rightHand');
+  document.getElementById('tap-hint').style.display = 'block';
 
-  // Right hand fingers
-  const rightThumbProximal = vrm.humanoid.getNormalizedBoneNode("rightThumbProximal");
-  const rightThumbIntermediate = vrm.humanoid.getNormalizedBoneNode("rightThumbIntermediate");
-  const rightThumbDistal = vrm.humanoid.getNormalizedBoneNode("rightThumbDistal");
-  const rightThumbTip = vrm.humanoid.getNormalizedBoneNode("rightThumbTip");
+  document.addEventListener('touchstart', () => {
+    if (reticle.visible && currentVRM) {
+      currentVRM.scene.position.setFromMatrixPosition(reticle.matrix);
+      currentVRM.scene.quaternion.setFromRotationMatrix(reticle.matrix);
+      currentVRM.scene.visible = true;
+      avatarPlaced = true;
+      reticle.visible = false;
+      document.getElementById('tap-hint').style.display = 'none';
+    }
+  });
 
-  const rightIndexProximal = vrm.humanoid.getNormalizedBoneNode("rightIndexProximal");
-  const rightIndexIntermediate = vrm.humanoid.getNormalizedBoneNode("rightIndexIntermediate");
-  const rightIndexDistal = vrm.humanoid.getNormalizedBoneNode("rightIndexDistal");
-  const rightIndexTip = vrm.humanoid.getNormalizedBoneNode("rightIndexTip");
+  xrSession.addEventListener('end', () => {
+    xrHitTestSource = null;
+    xrSession = null;
+    avatarPlaced = false;
+    renderer.xr.enabled = false;
+  });
 
-  const rightMiddleProximal = vrm.humanoid.getNormalizedBoneNode("rightMiddleProximal");
-  const rightMiddleIntermediate = vrm.humanoid.getNormalizedBoneNode("rightMiddleIntermediate");
-  const rightMiddleDistal = vrm.humanoid.getNormalizedBoneNode("rightMiddleDistal");
-  const rightMiddleTip = vrm.humanoid.getNormalizedBoneNode("rightMiddleTip");
-
-  const rightRingProximal = vrm.humanoid.getNormalizedBoneNode("rightRingProximal");
-  const rightRingIntermediate = vrm.humanoid.getNormalizedBoneNode("rightRingIntermediate");
-  const rightRingDistal = vrm.humanoid.getNormalizedBoneNode("rightRingDistal");
-  const rightRingTip = vrm.humanoid.getNormalizedBoneNode("rightRingTip");
-
-  const rightLittleProximal = vrm.humanoid.getNormalizedBoneNode("rightLittleProximal");
-  const rightLittleIntermediate = vrm.humanoid.getNormalizedBoneNode("rightLittleIntermediate");
-  const rightLittleDistal = vrm.humanoid.getNormalizedBoneNode("rightLittleDistal");
-  const rightLittleTip = vrm.humanoid.getNormalizedBoneNode("rightLittleTip");
-
-  // Left hand fingers
-  const leftThumbProximal = vrm.humanoid.getNormalizedBoneNode("leftThumbProximal");
-  const leftThumbIntermediate = vrm.humanoid.getNormalizedBoneNode("leftThumbIntermediate");
-  const leftThumbDistal = vrm.humanoid.getNormalizedBoneNode("leftThumbDistal");
-  const leftThumbTip = vrm.humanoid.getNormalizedBoneNode("leftThumbTip");
-
-  const leftIndexProximal = vrm.humanoid.getNormalizedBoneNode("leftIndexProximal");
-  const leftIndexIntermediate = vrm.humanoid.getNormalizedBoneNode("leftIndexIntermediate");
-  const leftIndexDistal = vrm.humanoid.getNormalizedBoneNode("leftIndexDistal");
-  const leftIndexTip = vrm.humanoid.getNormalizedBoneNode("leftIndexTip");
-
-  const leftMiddleProximal = vrm.humanoid.getNormalizedBoneNode("leftMiddleProximal");
-  const leftMiddleIntermediate = vrm.humanoid.getNormalizedBoneNode("leftMiddleIntermediate");
-  const leftMiddleDistal = vrm.humanoid.getNormalizedBoneNode("leftMiddleDistal");
-  const leftMiddleTip = vrm.humanoid.getNormalizedBoneNode("leftMiddleTip");
-
-  const leftRingProximal = vrm.humanoid.getNormalizedBoneNode("leftRingProximal");
-  const leftRingIntermediate = vrm.humanoid.getNormalizedBoneNode("leftRingIntermediate");
-  const leftRingDistal = vrm.humanoid.getNormalizedBoneNode("leftRingDistal");
-  const leftRingTip = vrm.humanoid.getNormalizedBoneNode("leftRingTip");
-
-  const leftLittleProximal = vrm.humanoid.getNormalizedBoneNode("leftLittleProximal");
-  const leftLittleIntermediate = vrm.humanoid.getNormalizedBoneNode("leftLittleIntermediate");
-  const leftLittleDistal = vrm.humanoid.getNormalizedBoneNode("leftLittleDistal");
-  const leftLittleTip = vrm.humanoid.getNormalizedBoneNode("leftLittleTip");
-
-  body = {
-    head: head,
-    neck: neck,
-    spine: spine,
-    hips: hips,
-
-    chest: chest,
-    upperChest: upperChest,
-
-    leftShoulder: leftShoulder,
-    rightShoulder: rightShoulder,
-
-    // Arms
-    leftUpperArm: leftUpperArm,
-    rightUpperArm: rightUpperArm,
-    leftLowerArm: leftLowerArm,
-    rightLowerArm: rightLowerArm,
-
-    // Legs
-    leftUpperLeg: leftUpperLeg,
-    rightUpperLeg: rightUpperLeg,
-    leftLowerLeg: leftLowerLeg,
-    rightLowerLeg: rightLowerLeg,
-    leftFoot: leftFoot,
-    rightFoot: rightFoot,
-
-    // Hands
-    leftHand: leftHand,
-    rightHand: rightHand,
-
-    // Left fingers
-    leftThumbProximal: leftThumbProximal,
-    leftThumbIntermediate: leftThumbIntermediate,
-    leftThumbDistal: leftThumbDistal,
-    leftThumbTip: leftThumbTip,
-
-    leftIndexProximal: leftIndexProximal,
-    leftIndexIntermediate: leftIndexIntermediate,
-    leftIndexDistal: leftIndexDistal,
-    leftIndexTip: leftIndexTip,
-
-    leftMiddleProximal: leftMiddleProximal,
-    leftMiddleIntermediate: leftMiddleIntermediate,
-    leftMiddleDistal: leftMiddleDistal,
-    leftMiddleTip: leftMiddleTip,
-
-    leftRingProximal: leftRingProximal,
-    leftRingIntermediate: leftRingIntermediate,
-    leftRingDistal: leftRingDistal,
-    leftRingTip: leftRingTip,
-
-    leftLittleProximal: leftLittleProximal,
-    leftLittleIntermediate: leftLittleIntermediate,
-    leftLittleDistal: leftLittleDistal,
-    leftLittleTip: leftLittleTip,
-
-    // Right fingers
-    rightThumbProximal: rightThumbProximal,
-    rightThumbIntermediate: rightThumbIntermediate,
-    rightThumbDistal: rightThumbDistal,
-    rightThumbTip: rightThumbTip,
-
-    rightIndexProximal: rightIndexProximal,
-    rightIndexIntermediate: rightIndexIntermediate,
-    rightIndexDistal: rightIndexDistal,
-    rightIndexTip: rightIndexTip,
-
-    rightMiddleProximal: rightMiddleProximal,
-    rightMiddleIntermediate: rightMiddleIntermediate,
-    rightMiddleDistal: rightMiddleDistal,
-    rightMiddleTip: rightMiddleTip,
-
-    rightRingProximal: rightRingProximal,
-    rightRingIntermediate: rightRingIntermediate,
-    rightRingDistal: rightRingDistal,
-    rightRingTip: rightRingTip,
-
-    rightLittleProximal: rightLittleProximal,
-    rightLittleIntermediate: rightLittleIntermediate,
-    rightLittleDistal: rightLittleDistal,
-    rightLittleTip: rightLittleTip,
-  };
+  window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({
+    event: 'arStarted'
+  }));
 }
 
 // ─── Animation Loop ──────────────────────────────────────────────────────────
-let elapsedTime = 0;
-
-function animate() {
+renderer.setAnimationLoop((timestamp, frame) => {
   const delta = clock.getDelta();
   elapsedTime += delta;
 
   if (currentVRM) {
     currentVRM.update(delta);
-  }
-
-  if (currentVRM) {
     setBonesToIdle(elapsedTime, vrmFactor);
     applyPoseBuffer();
   }
 
+  // WebXR hit test (only active in 'ar' mode with a live session)
+  if (frame && xrHitTestSource && xrRefSpace) {
+    const hits = frame.getHitTestResults(xrHitTestSource);
+    if (hits.length > 0 && !avatarPlaced) {
+      const pose = hits[0].getPose(xrRefSpace);
+      reticle.visible = true;
+      reticle.matrix.fromArray(pose.transform.matrix);
+    } else {
+      reticle.visible = false;
+    }
+  }
+
   renderer.render(scene, camera);
-  requestAnimationFrame(animate);
-}
+});
 
-// ─── Flutter Bridge ──────────────────────────────────────────────────────────
-requestAnimationFrame(animate);
+// Exposed for HTML overlay button
+window.startARSession = startAR;
 
-// Receives messages from Dart
-window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({ event: 'ready' }));
-
-window.onFlutterMessage = (message) => {
-  let payload;
-  try {
-    payload = typeof message === "string" ? JSON.parse(message) : message;
-  } catch (err) {
-    console.error("Invalid message from Flutter:", err);
-    return;
-  }
-
-  if (payload?.command === "loadVRM") {
-    if (payload.data) {
-      const buffer = base64ToArrayBuffer(payload.data);
-      loadVRMFromBuffer(buffer, payload.fileName);
-      return;
-    }
-    if (payload.url) {
-      loadVRMFromUrl(payload.url);
-    }
-  }
-};
+// Signal Flutter that JS is ready
+window.addEventListener('load', () => {
+  window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({
+    event: 'ready'
+  }));
+});
