@@ -109,3 +109,5 @@ aikomate_flutter/
 │       └── viewer_screen_test.dart
 │
 └── pubspec.yaml
+
+npm install -g @gltf-transform/cligltf-transform optimize UltimateLoverH1.vrm UltimateLoverH1.glb

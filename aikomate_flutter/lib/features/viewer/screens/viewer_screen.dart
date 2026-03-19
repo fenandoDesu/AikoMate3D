@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:convert';
 import 'ar_screen.dart';
+import 'dart:ui';
+import '../../../reusable_widgets/glass.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -15,6 +17,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   InAppLocalhostServer? _localhostServer;
   final int _serverPort = 8080;
   bool _serverReady = false;
+  bool _showOptions = false;
 
   @override
   void initState() {
@@ -35,7 +38,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   void _loadVRM() {
-    const vrmUrl = 'http://localhost:8080/assets/web/models/UltimateLoverH1.vrm';
+    const vrmUrl =
+        'http://localhost:8080/assets/web/models/UltimateLoverH1.vrm';
     final message = jsonEncode({'command': 'loadVRM', 'url': vrmUrl});
     _controller?.evaluateJavascript(
       source: "window.onFlutterMessage('$message')",
@@ -45,9 +49,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   @override
   Widget build(BuildContext context) {
     if (!_serverReady) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
@@ -55,7 +57,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
         children: [
           InAppWebView(
             initialUrlRequest: URLRequest(
-              url: WebUri('http://localhost:$_serverPort/assets/web/index.html?mode=normal'),
+              url: WebUri(
+                'http://localhost:$_serverPort/assets/web/index.html?mode=normal',
+              ),
             ),
             initialSettings: InAppWebViewSettings(
               javaScriptEnabled: true,
@@ -77,7 +81,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
               debugPrint('JS console: ${message.message}');
             },
             onReceivedError: (controller, request, error) {
-              debugPrint('WebView error: ${error.description} url: ${request.url}');
+              debugPrint(
+                'WebView error: ${error.description} url: ${request.url}',
+              );
             },
             onPermissionRequest: (controller, request) async {
               return PermissionResponse(
@@ -87,22 +93,138 @@ class _ViewerScreenState extends State<ViewerScreen> {
             },
           ),
 
+          // options button top left
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 12,
+            left: 16,
+            child: GlassIconButton(
+              size: 50,
+              radius: 15,
+              style: GlassPresets.button,
+              icon: Icons.menu,
+              onPressed: () {
+                setState(() {
+                  _showOptions = true;
+                });
+              },
+            ),
+          ),
           // AR button top right
           Positioned(
             top: MediaQuery.of(context).padding.top + 12,
             right: 16,
-            child: FloatingActionButton.small(
-              heroTag: 'ar_btn',
-              backgroundColor: Colors.white.withOpacity(0.9),
+            child: GlassIconButton(
+              size: 50,
+              radius: 15,
+              style: GlassPresets.button,
+              icon: Icons.view_in_ar,
               onPressed: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const ArScreen()),
                 );
               },
-              child: const Icon(Icons.view_in_ar, color: Colors.deepPurple),
             ),
           ),
+          Positioned(
+            bottom: 20,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: GlassContainer(
+                  style: GlassPresets.chatBar,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            hintText: "Type a message...",
+                            hintStyle: TextStyle(color: Colors.white70),
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.send),
+                        color: Colors.white.withOpacity(0.9),
+                        onPressed: () {},
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.mic),
+                        color: Colors.white.withOpacity(0.9),
+                        onPressed: () {},
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_showOptions)
+            Positioned.fill(
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: _showOptions ? 1 : 0,
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _showOptions = false;
+                    });
+                  },
+                  child: Container(
+                    color: Colors.black.withOpacity(0.3),
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: () {},
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GlassContainer(
+                              style: GlassPresets.button,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 16,
+                              ),
+                              child: const Text(
+                                "Settings",
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            GlassContainer(
+                              style: GlassPresets.button,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 16,
+                              ),
+                              child: const Text(
+                                "Profile",
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            GlassContainer(
+                              style: GlassPresets.button,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 16,
+                              ),
+                              child: const Text(
+                                "Logout",
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

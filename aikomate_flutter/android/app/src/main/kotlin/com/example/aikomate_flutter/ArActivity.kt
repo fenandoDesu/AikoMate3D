@@ -40,12 +40,19 @@ class ArActivity : AppCompatActivity() {
     private var anchorNode: AnchorNode? = null
     private var cameraTextureBound = false
 
+    private var idleAnimator: VrmIdleAnimator? = null
+    private var elapsedTimeSec = 0f
+    private var lastFrameNanos = 0L
+    private var vrmFactor = 1f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_ar)
 
         hudTextView = findViewById(R.id.hudText)
         findViewById<TextView>(R.id.backBtn).setOnClickListener { finish() }
+
+        vrmFactor = detectVrmFactor(MODEL_PATH)
 
         arFragment = obtainArFragment()
         configureArFragment()
@@ -106,8 +113,15 @@ class ArActivity : AppCompatActivity() {
     private fun attachSceneUpdateListener(sceneView: ArSceneView) {
         if (sceneUpdateListenerAttached) return
         sceneUpdateListenerAttached = true
+        lastFrameNanos = System.nanoTime()
 
         sceneView.scene.addOnUpdateListener {
+            val now = System.nanoTime()
+            val dt = ((now - lastFrameNanos).coerceAtLeast(0L) / 1_000_000_000.0).toFloat()
+            lastFrameNanos = now
+            elapsedTimeSec += dt
+            idleAnimator?.update(elapsedTimeSec)
+
             if (!cameraTextureBound) {
                 bindSessionCameraTexture(sceneView)
             }
@@ -198,6 +212,7 @@ class ArActivity : AppCompatActivity() {
             return
         }
 
+        idleAnimator = null
         anchorNode?.anchor?.detach()
         anchorNode?.setParent(null)
 
@@ -210,9 +225,19 @@ class ArActivity : AppCompatActivity() {
             this.renderable = renderable
             select()
 
-            val renderableInstance: RenderableInstance? = renderableInstance
-            if (renderableInstance != null && renderableInstance.hasAnimations()) {
-                renderableInstance.animate(true).start()
+            val instance: RenderableInstance? = renderableInstance
+            if (instance != null) {
+                val animator = VrmIdleAnimator(instance, vrmFactor)
+                idleAnimator = if (animator.hasAnyBoundBone()) {
+                    Log.d(TAG, "Started procedural idle animation in AR mode.")
+                    animator
+                } else {
+                    if (instance.hasAnimations()) {
+                        instance.animate(true).start()
+                        Log.d(TAG, "Falling back to embedded GLB animation in AR mode.")
+                    }
+                    null
+                }
             }
         }
 
@@ -221,11 +246,45 @@ class ArActivity : AppCompatActivity() {
         updateHud(successHud)
     }
 
+    private fun detectVrmFactor(assetPath: String): Float {
+        return runCatching {
+            assets.open(assetPath).use { input ->
+                val header = ByteArray(12)
+                if (input.read(header) != 12) return@runCatching 1f
+
+                val chunkLenBytes = ByteArray(4)
+                if (input.read(chunkLenBytes) != 4) return@runCatching 1f
+                val chunkLen =
+                    (chunkLenBytes[0].toInt() and 0xFF) or
+                        ((chunkLenBytes[1].toInt() and 0xFF) shl 8) or
+                        ((chunkLenBytes[2].toInt() and 0xFF) shl 16) or
+                        ((chunkLenBytes[3].toInt() and 0xFF) shl 24)
+
+                if (input.skip(4) != 4L) return@runCatching 1f // chunk type
+
+                val jsonBytes = ByteArray(chunkLen)
+                val read = input.read(jsonBytes)
+                if (read <= 0) return@runCatching 1f
+
+                val json = String(jsonBytes, Charsets.UTF_8)
+                when {
+                    json.contains("VRMC_vrm") -> 1f
+                    json.contains("\"VRM\"") -> -1f
+                    else -> 1f
+                }
+            }
+        }.getOrElse {
+            Log.w(TAG, "Could not detect VRM version, defaulting factor=1: ${it.message}")
+            1f
+        }
+    }
+
     private fun updateHud(text: String) {
         runOnUiThread { hudTextView.text = text }
     }
 
     override fun onDestroy() {
+        idleAnimator = null
         runCatching { anchorNode?.anchor?.detach() }
         runCatching { anchorNode?.setParent(null) }
         anchorNode = null
