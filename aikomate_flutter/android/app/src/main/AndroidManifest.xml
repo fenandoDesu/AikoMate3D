@@ -13,12 +13,6 @@
         android:enableOnBackInvokedCallback="true">
 
         <meta-data
-            android:name="android.webkit.WebView.Provider"
-            android:value="com.android.chrome" />
-        <meta-data
-            android:name="com.google.android.feature.EXCHANGE_6_2"
-            android:value="true" />
-        <meta-data
             android:name="com.google.ar.core"
             android:value="required"
             tools:replace="android:value" />
@@ -44,6 +38,13 @@
             </intent-filter>
         </activity>
 
+        <!-- AR Activity — full screen, owns GL context entirely -->
+        <activity
+    android:name=".ArActivity"
+    android:exported="false"
+    android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+    android:configChanges="orientation|keyboardHidden|keyboard|screenSize|uiMode"
+    android:hardwareAccelerated="true" />
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
