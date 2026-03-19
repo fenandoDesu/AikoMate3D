@@ -42,7 +42,7 @@
         <activity
     android:name=".ArActivity"
     android:exported="false"
-    android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+    android:theme="@style/ArTheme"
     android:configChanges="orientation|keyboardHidden|keyboard|screenSize|uiMode"
     android:hardwareAccelerated="true" />
         <meta-data

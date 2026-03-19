@@ -1,239 +1,196 @@
 package com.example.aikomate_flutter
 
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import com.google.ar.core.Anchor
 import com.google.ar.core.Config
-import com.google.ar.core.Frame
 import com.google.ar.core.Plane
-import com.google.ar.core.Session
 import com.google.ar.core.TrackingFailureReason
-import io.github.sceneview.ar.ARScene
-import io.github.sceneview.ar.arcore.createAnchorOrNull
-import io.github.sceneview.ar.arcore.getUpdatedPlanes
-import io.github.sceneview.ar.arcore.isValid
-import io.github.sceneview.ar.camera.ARCameraStream
-import io.github.sceneview.ar.node.AnchorNode
-import io.github.sceneview.ar.rememberARCameraNode
-import io.github.sceneview.ar.rememberARCameraStream
-import io.github.sceneview.math.Position
-import io.github.sceneview.node.ModelNode
-import io.github.sceneview.rememberEngine
-import io.github.sceneview.rememberMaterialLoader
-import io.github.sceneview.rememberModelLoader
-import io.github.sceneview.rememberNodes
-import io.github.sceneview.rememberOnGestureListener
-import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.launch
+import com.google.ar.core.TrackingState
+import com.google.ar.sceneform.ArSceneView
+import com.google.ar.sceneform.AnchorNode
+import com.google.ar.sceneform.rendering.ModelRenderable
+import com.google.ar.sceneform.rendering.RenderableInstance
+import com.google.ar.sceneform.ux.ArFragment
+import com.google.ar.sceneform.ux.TransformableNode
 
-class ArActivity : ComponentActivity() {
+class ArActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ArActivity"
+        private const val FRAGMENT_TAG = "AikoArFragment"
+        private const val MODEL_PATH = "models/UltimateLoverH1.glb"
     }
+
+    private lateinit var arFragment: ArFragment
+    private lateinit var hudTextView: TextView
+
+    private var arSceneView: ArSceneView? = null
+    private var sceneUpdateListenerAttached = false
+    private var modelRenderable: ModelRenderable? = null
+    private var modelLoading = false
+    private var modelPlaced = false
+    private var anchorNode: AnchorNode? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_ar)
 
-        setContent {
-            var hudText by remember { mutableStateOf("Move camera slowly to detect surfaces") }
-            var modelPlaced by remember { mutableStateOf(false) }
-            var cameraTexturesBound by remember { mutableStateOf(false) }
-            val latestFrame = remember { AtomicReference<Frame?>(null) }
-            val scope = rememberCoroutineScope()
+        hudTextView = findViewById(R.id.hudText)
+        findViewById<TextView>(R.id.backBtn).setOnClickListener { finish() }
 
-            val engine = rememberEngine()
-            val modelLoader = rememberModelLoader(engine)
-            val materialLoader = rememberMaterialLoader(engine)
-            val cameraNode = rememberARCameraNode(engine)
-            val cameraStream = rememberARCameraStream(materialLoader)
-            val childNodes = rememberNodes()
+        arFragment = obtainArFragment()
+        configureArFragment()
+        loadModel()
+    }
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                ARScene(
-                    modifier = Modifier.fillMaxSize(),
-                    engine = engine,
-                    modelLoader = modelLoader,
-                    materialLoader = materialLoader,
-                    childNodes = childNodes,
-                    cameraNode = cameraNode,
-                    cameraStream = cameraStream,
-                    planeRenderer = true,
-                    isOpaque = true,
-                    activity = this@ArActivity,
-                    lifecycle = lifecycle,
-                    sessionConfiguration = { session: Session, config: Config ->
-                        config.depthMode = if (
-                            session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
-                        ) {
-                            Config.DepthMode.AUTOMATIC
-                        } else {
-                            Config.DepthMode.DISABLED
-                        }
-                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-                        config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
-                        config.focusMode = Config.FocusMode.AUTO
-                    },
-                    onSessionCreated = { session ->
-                        bindCameraTextures(session, cameraStream)
-                    },
-                    onSessionResumed = { session ->
-                        bindCameraTextures(session, cameraStream)
-                    },
-                    onSessionUpdated = { session: Session, updatedFrame: Frame ->
-                        val textureNameMatched = cameraStream.cameraTextureIds
-                            .contains(updatedFrame.cameraTextureName)
+    private fun obtainArFragment(): ArFragment {
+        (supportFragmentManager.findFragmentByTag(FRAGMENT_TAG) as? ArFragment)?.let { return it }
 
-                        if (!cameraTexturesBound || !textureNameMatched) {
-                            cameraTexturesBound = bindCameraTextures(
-                                session = session,
-                                cameraStream = cameraStream
-                            )
-                            if (!textureNameMatched) {
-                                Log.w(
-                                    TAG,
-                                    "Frame texture ${updatedFrame.cameraTextureName} not in " +
-                                        "bound IDs ${cameraStream.cameraTextureIds.joinToString()}"
-                                )
-                            }
-                        }
-                        latestFrame.set(updatedFrame)
-                        if (modelPlaced) return@ARScene
+        val fragment = ArFragment.newInstance(true)
+        supportFragmentManager
+            .beginTransaction()
+            .replace(R.id.arFragmentContainer, fragment, FRAGMENT_TAG)
+            .commitNow()
+        return fragment
+    }
 
-                        updatedFrame.getUpdatedPlanes()
-                            .firstOrNull { it.type == Plane.Type.HORIZONTAL_UPWARD_FACING }
-                            ?.let { plane ->
-                                modelPlaced = true
-                                val anchor = plane.createAnchor(plane.centerPose)
-                                val anchorNode = AnchorNode(engine, anchor)
-                                childNodes.add(anchorNode)
+    private fun configureArFragment() {
+        arFragment.setOnSessionConfigurationListener { session, config ->
+            config.depthMode =
+                if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    Config.DepthMode.AUTOMATIC
+                } else {
+                    Config.DepthMode.DISABLED
+                }
+            config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+            config.lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
+            config.focusMode = Config.FocusMode.AUTO
+        }
 
-                                scope.launch {
-                                    try {
-                                        val instance = modelLoader.createModelInstance(
-                                            assetFileLocation = "models/UltimateLoverH1.glb"
-                                        )
-                                        val modelNode = ModelNode(
-                                            modelInstance = instance,
-                                            scaleToUnits = 1.0f,
-                                            centerOrigin = Position(y = -1.0f)
-                                        )
-                                        anchorNode.addChildNode(modelNode)
-                                        modelNode.playAnimation(0)
-                                        hudText = "Avatar placed - move around to view"
-                                        Log.d(TAG, "Model placed")
-                                    } catch (e: Exception) {
-                                        modelPlaced = false
-                                        Log.e(TAG, "Model load failed: ${e.message}", e)
-                                    }
-                                }
-                            }
-                    },
-                    onTrackingFailureChanged = { reason: TrackingFailureReason? ->
-                        if (modelPlaced) return@ARScene
-                        hudText = when (reason) {
-                            null, TrackingFailureReason.NONE ->
-                                "Move camera slowly to detect surfaces"
-                            TrackingFailureReason.INSUFFICIENT_LIGHT ->
-                                "Too dark - find better lighting"
-                            TrackingFailureReason.EXCESSIVE_MOTION ->
-                                "Moving too fast - slow down"
-                            TrackingFailureReason.INSUFFICIENT_FEATURES ->
-                                "Point at a textured surface"
-                            else -> "Move camera slowly to detect surfaces"
-                        }
-                    },
-                    onGestureListener = rememberOnGestureListener(
-                        onSingleTapConfirmed = { motionEvent, _ ->
-                            if (!modelPlaced) return@rememberOnGestureListener
+        arFragment.setOnTapArPlaneListener { hitResult, _, _ ->
+            if (modelRenderable == null) {
+                updateHud("Loading avatar model...")
+                return@setOnTapArPlaneListener
+            }
+            placeAvatar(hitResult.createAnchor(), "Avatar repositioned")
+        }
 
-                            val hitResult = latestFrame.get()
-                                ?.hitTest(motionEvent)
-                                ?.firstOrNull { hit ->
-                                    hit.isValid(depthPoint = false, point = false)
-                                }
-                                ?: return@rememberOnGestureListener
+        arFragment.setOnViewCreatedListener { sceneView ->
+            arSceneView = sceneView
+            attachSceneUpdateListener(sceneView)
+        }
 
-                            val newAnchor = hitResult.createAnchorOrNull()
-                                ?: return@rememberOnGestureListener
+        // If fragment view is already created (e.g. after commitNow), hook immediately.
+        runCatching { arFragment.arSceneView }.getOrNull()?.let { sceneView ->
+            arSceneView = sceneView
+            attachSceneUpdateListener(sceneView)
+        }
+    }
 
-                            childNodes.filterIsInstance<AnchorNode>()
-                                .firstOrNull()
-                                ?.let { it.anchor = newAnchor }
+    private fun attachSceneUpdateListener(sceneView: ArSceneView) {
+        if (sceneUpdateListenerAttached) return
+        sceneUpdateListenerAttached = true
 
-                            hudText = "Avatar repositioned"
-                            Log.d(TAG, "Avatar repositioned")
-                        }
-                    )
+        sceneView.scene.addOnUpdateListener {
+            val frame = sceneView.arFrame ?: return@addOnUpdateListener
+
+            if (!modelPlaced && modelRenderable != null) {
+                frame.getUpdatedTrackables(Plane::class.java)
+                    .firstOrNull {
+                        it.type == Plane.Type.HORIZONTAL_UPWARD_FACING &&
+                            it.trackingState == TrackingState.TRACKING
+                    }
+                    ?.let { plane ->
+                        placeAvatar(plane.createAnchor(plane.centerPose), "Avatar placed - move around to view")
+                    }
+            }
+
+            if (!modelPlaced) {
+                val reason = if (frame.camera.trackingState == TrackingState.TRACKING) {
+                    TrackingFailureReason.NONE
+                } else {
+                    frame.camera.trackingFailureReason
+                }
+                updateHud(
+                    when (reason) {
+                        TrackingFailureReason.NONE -> "Move camera slowly to detect surfaces"
+                        TrackingFailureReason.INSUFFICIENT_LIGHT -> "Too dark - find better lighting"
+                        TrackingFailureReason.EXCESSIVE_MOTION -> "Moving too fast - slow down"
+                        TrackingFailureReason.INSUFFICIENT_FEATURES -> "Point at a textured surface"
+                        else -> "Move camera slowly to detect surfaces"
+                    }
                 )
-
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 100.dp)
-                        .wrapContentSize(),
-                    color = Color(0x88000000),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
-                    Text(
-                        text = hudText,
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
-                    )
-                }
-
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 60.dp, end = 16.dp)
-                        .wrapContentSize(),
-                    color = Color.White,
-                    shape = RoundedCornerShape(8.dp),
-                    onClick = { finish() }
-                ) {
-                    Text(
-                        text = "X",
-                        color = Color.Black,
-                        fontSize = 18.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
             }
         }
     }
 
-    private fun bindCameraTextures(session: Session, cameraStream: ARCameraStream): Boolean {
-        val textureIds = cameraStream.cameraTextureIds
-        if (textureIds.any { it == 0 }) {
-            Log.w(TAG, "Camera texture IDs not ready yet: ${textureIds.joinToString()}")
-            return false
+    private fun loadModel() {
+        if (modelLoading || modelRenderable != null) return
+
+        modelLoading = true
+        updateHud("Loading avatar model...")
+
+        ModelRenderable.builder()
+            .setSource(this, Uri.parse(MODEL_PATH))
+            .setIsFilamentGltf(true)
+            .setRegistryId(MODEL_PATH)
+            .build()
+            .thenAccept { renderable ->
+                modelRenderable = renderable
+                modelLoading = false
+                updateHud("Move camera slowly to detect surfaces")
+                Log.d(TAG, "Model loaded: $MODEL_PATH")
+            }
+            .exceptionally { throwable ->
+                modelLoading = false
+                updateHud("Failed to load avatar model")
+                Log.e(TAG, "Model load failed: ${throwable.message}", throwable)
+                null
+            }
+    }
+
+    private fun placeAvatar(anchor: Anchor, successHud: String) {
+        val renderable = modelRenderable ?: return
+        val sceneView = arSceneView ?: run {
+            Log.w(TAG, "AR scene view is not ready yet.")
+            return
         }
-        return try {
-            session.setCameraTextureNames(textureIds)
-            Log.d(TAG, "Bound camera textures: ${textureIds.joinToString()}")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to bind camera textures: ${e.message}", e)
-            false
+
+        anchorNode?.anchor?.detach()
+        anchorNode?.setParent(null)
+
+        val newAnchorNode = AnchorNode(anchor).apply {
+            setParent(sceneView.scene)
         }
+
+        TransformableNode(arFragment.transformationSystem).apply {
+            setParent(newAnchorNode)
+            this.renderable = renderable
+            select()
+
+            val renderableInstance: RenderableInstance? = renderableInstance
+            if (renderableInstance != null && renderableInstance.hasAnimations()) {
+                renderableInstance.animate(true).start()
+            }
+        }
+
+        anchorNode = newAnchorNode
+        modelPlaced = true
+        updateHud(successHud)
+    }
+
+    private fun updateHud(text: String) {
+        runOnUiThread { hudTextView.text = text }
+    }
+
+    override fun onDestroy() {
+        runCatching { anchorNode?.anchor?.detach() }
+        runCatching { anchorNode?.setParent(null) }
+        anchorNode = null
+        super.onDestroy()
     }
 }

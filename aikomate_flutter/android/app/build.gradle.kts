@@ -2,7 +2,6 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
-    id("org.jetbrains.kotlin.plugin.compose")  // ← add this
 }
 
 android {
@@ -27,10 +26,6 @@ android {
         versionName = flutter.versionName
     }
 
-    buildFeatures {
-        compose = true
-    }
-
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
@@ -38,11 +33,10 @@ android {
     }
 
     dependencies {
-        implementation("io.github.sceneview:arsceneview:2.3.3")
-        implementation("androidx.activity:activity-compose:1.10.1")
-        implementation("androidx.compose.ui:ui:1.10.0")
-        implementation("androidx.compose.material3:material3:1.4.0")
+        implementation("com.gorisse.thomas.sceneform:ux:1.23.0")
+        implementation("com.google.ar:core:1.31.0")
         implementation("androidx.appcompat:appcompat:1.7.1")
+        implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     }
 }
 
