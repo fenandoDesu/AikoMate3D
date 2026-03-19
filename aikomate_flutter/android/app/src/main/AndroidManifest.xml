@@ -42,6 +42,7 @@
         <activity
     android:name=".ArActivity"
     android:exported="false"
+    android:process=":ar"
     android:theme="@style/ArTheme"
     android:configChanges="orientation|keyboardHidden|keyboard|screenSize|uiMode"
     android:hardwareAccelerated="true" />

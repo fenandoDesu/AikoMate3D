@@ -8,14 +8,18 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.ar.core.Anchor
 import com.google.ar.core.Config
 import com.google.ar.core.Plane
+import com.google.ar.core.Session
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
 import com.google.ar.sceneform.ArSceneView
 import com.google.ar.sceneform.AnchorNode
+import com.google.ar.sceneform.rendering.CameraStream
 import com.google.ar.sceneform.rendering.ModelRenderable
 import com.google.ar.sceneform.rendering.RenderableInstance
 import com.google.ar.sceneform.ux.ArFragment
 import com.google.ar.sceneform.ux.TransformableNode
+import com.gorisse.thomas.sceneform.light.LightEstimationConfig
+import com.gorisse.thomas.sceneform.lightEstimationConfig
 
 class ArActivity : AppCompatActivity() {
 
@@ -34,6 +38,7 @@ class ArActivity : AppCompatActivity() {
     private var modelLoading = false
     private var modelPlaced = false
     private var anchorNode: AnchorNode? = null
+    private var cameraTextureBound = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,6 +74,7 @@ class ArActivity : AppCompatActivity() {
             config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
             config.lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
             config.focusMode = Config.FocusMode.AUTO
+            config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
         }
 
         arFragment.setOnTapArPlaneListener { hitResult, _, _ ->
@@ -81,12 +87,18 @@ class ArActivity : AppCompatActivity() {
 
         arFragment.setOnViewCreatedListener { sceneView ->
             arSceneView = sceneView
+            sceneView.lightEstimationConfig = LightEstimationConfig.DISABLED
+            sceneView.cameraStream.setDepthOcclusionMode(CameraStream.DepthOcclusionMode.DEPTH_OCCLUSION_DISABLED)
+            bindSessionCameraTexture(sceneView)
             attachSceneUpdateListener(sceneView)
         }
 
         // If fragment view is already created (e.g. after commitNow), hook immediately.
         runCatching { arFragment.arSceneView }.getOrNull()?.let { sceneView ->
             arSceneView = sceneView
+            sceneView.lightEstimationConfig = LightEstimationConfig.DISABLED
+            sceneView.cameraStream.setDepthOcclusionMode(CameraStream.DepthOcclusionMode.DEPTH_OCCLUSION_DISABLED)
+            bindSessionCameraTexture(sceneView)
             attachSceneUpdateListener(sceneView)
         }
     }
@@ -96,6 +108,10 @@ class ArActivity : AppCompatActivity() {
         sceneUpdateListenerAttached = true
 
         sceneView.scene.addOnUpdateListener {
+            if (!cameraTextureBound) {
+                bindSessionCameraTexture(sceneView)
+            }
+
             val frame = sceneView.arFrame ?: return@addOnUpdateListener
 
             if (!modelPlaced && modelRenderable != null) {
@@ -125,6 +141,28 @@ class ArActivity : AppCompatActivity() {
                     }
                 )
             }
+        }
+    }
+
+    private fun bindSessionCameraTexture(sceneView: ArSceneView) {
+        val session = sceneView.session ?: return
+        val textureId = sceneView.cameraTextureId
+        if (textureId == 0) return
+
+        val bound = runCatching {
+            val setTextureNames = Session::class.java.getMethod("setCameraTextureNames", IntArray::class.java)
+            setTextureNames.invoke(session, intArrayOf(textureId))
+            true
+        }.getOrElse {
+            runCatching {
+                session.setCameraTextureName(textureId)
+                true
+            }.getOrDefault(false)
+        }
+
+        if (bound) {
+            cameraTextureBound = true
+            Log.d(TAG, "Camera texture bound to session: id=$textureId")
         }
     }
 
