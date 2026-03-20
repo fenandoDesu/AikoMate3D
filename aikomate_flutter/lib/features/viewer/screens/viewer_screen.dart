@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:convert';
 import 'ar_screen.dart';
-import 'dart:ui';
 import '../../../reusable_widgets/glass.dart';
+import '../../../menu_sections_pages/login.dart';
+import '../../../menu_sections_pages/signup.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -11,6 +12,10 @@ class ViewerScreen extends StatefulWidget {
   @override
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
+
+enum OverlayView { menu, login, signup }
+
+OverlayView _overlayView = OverlayView.menu;
 
 class _ViewerScreenState extends State<ViewerScreen> {
   InAppWebViewController? _controller;
@@ -44,6 +49,68 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _controller?.evaluateJavascript(
       source: "window.onFlutterMessage('$message')",
     );
+  }
+
+  Widget _buildOption(IconData icon, {VoidCallback? onTap}) {
+    return GlassIconButton(
+      adaptiveIconSize: true,
+      size: 50,
+      radius: 15,
+      padding: EdgeInsets.all(12),
+      style: GlassPresets.button,
+      icon: icon,
+      onPressed: onTap ?? () {},
+    );
+  }
+
+  Widget _buildOverlayContent() {
+    switch (_overlayView) {
+      case OverlayView.menu:
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GridView.count(
+            key: const ValueKey("menu"),
+            shrinkWrap: true,
+            crossAxisCount: 4,
+            mainAxisSpacing: 20,
+            crossAxisSpacing: 20,
+            children: [
+              _buildOption(
+                Icons.account_circle_outlined,
+                onTap: () {
+                  setState(() => _overlayView = OverlayView.login);
+                },
+              ),
+              _buildOption(Icons.shopping_bag_outlined),
+              _buildOption(Icons.wallpaper_outlined),
+              _buildOption(Icons.question_answer_outlined),
+              _buildOption(Icons.diversity_1_outlined),
+              _buildOption(Icons.record_voice_over_outlined),
+              _buildOption(Icons.translate_outlined),
+              _buildOption(Icons.settings_outlined),
+            ],
+          ),
+        );
+
+      case OverlayView.login:
+        return LoginView(
+          key: const ValueKey("login"),
+          onBack: () {
+            setState(() => _overlayView = OverlayView.menu);
+          },
+          onSignup: () {
+            setState(() => _overlayView = OverlayView.signup);
+          },
+        );
+
+      case OverlayView.signup:
+        return SignupView(
+          key: const ValueKey("signup"),
+          onBack: () {
+            setState(() => _overlayView = OverlayView.login);
+          },
+        );
+    }
   }
 
   @override
@@ -98,13 +165,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
             top: MediaQuery.of(context).padding.top + 12,
             left: 16,
             child: GlassIconButton(
-              size: 50,
+              adaptiveIconSize: true,
+              padding: EdgeInsets.all(8),
+              size: 55,
               radius: 15,
               style: GlassPresets.button,
               icon: Icons.menu,
               onPressed: () {
                 setState(() {
-                  _showOptions = true;
+                  _showOptions = true; 
+                  _overlayView = OverlayView.menu; // reset to menu
                 });
               },
             ),
@@ -114,7 +184,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
             top: MediaQuery.of(context).padding.top + 12,
             right: 16,
             child: GlassIconButton(
-              size: 50,
+              adaptiveIconSize: true,
+              padding: EdgeInsets.all(8),
+              size: 55,
               radius: 15,
               style: GlassPresets.button,
               icon: Icons.view_in_ar,
@@ -175,49 +247,19 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     });
                   },
                   child: Container(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withOpacity(0.6),
                     child: Center(
                       child: GestureDetector(
                         onTap: () {},
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GlassContainer(
-                              style: GlassPresets.button,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                                vertical: 16,
-                              ),
-                              child: const Text(
-                                "Settings",
-                                style: TextStyle(color: Colors.white),
-                              ),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 250),
+                              child: _buildOverlayContent(),
                             ),
-                            const SizedBox(height: 16),
-                            GlassContainer(
-                              style: GlassPresets.button,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                                vertical: 16,
-                              ),
-                              child: const Text(
-                                "Profile",
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            GlassContainer(
-                              style: GlassPresets.button,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                                vertical: 16,
-                              ),
-                              child: const Text(
-                                "Logout",
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
