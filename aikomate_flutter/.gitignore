@@ -32,6 +32,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+aikomate_flutter\lib\core\config\
 
 # Symbolication related
 app.*.symbols

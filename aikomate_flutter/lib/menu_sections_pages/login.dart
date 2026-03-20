@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
-final storage = const FlutterSecureStorage();
+import 'package:aikomate_flutter/core/api/login_api.dart';
 
 class LoginView extends StatefulWidget {
   final VoidCallback onBack;
-  final VoidCallback onSignup;
+  final VoidCallback? onSignup;
+  final VoidCallback? onSuccess;
+  final VoidCallback onLoginSuccess;
 
   const LoginView({
     super.key,
     required this.onBack,
-    required this.onSignup,
+    this.onSignup,
+    this.onSuccess,
+    required this.onLoginSuccess,
   });
 
   @override
@@ -26,45 +26,36 @@ class _LoginViewState extends State<LoginView> {
   String? error;
   bool loading = false;
 
-  Future<void> login() async {
+  Future<void> handleLogin() async {
     setState(() {
       loading = true;
       error = null;
     });
 
-    try {
-      final res = await http.post(
-        Uri.parse("https://api.japaneseblossom.com/auth/login"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "email": emailController.text,
-          "password": passwordController.text,
-        }),
-      );
+    final result = await login(
+      emailController.text.trim(),
+      passwordController.text.trim(),
+    );
 
-      final data = jsonDecode(res.body);
+    if (!mounted) return;
 
-      if (res.statusCode != 200) {
-        setState(() {
-          error = data["detail"];
-        });
-        return;
-      }
-
-      await storage.write(key: "token", value: data["token"]);
-
-    } catch (e) {
+    if (!result.success) {
       setState(() {
-        error = "Network error";
+        error = result.error ?? "Login failed";
+        loading = false;
       });
-    } finally {
-      setState(() => loading = false);
+      return;
     }
+
+    setState(() => loading = false);
+
+    widget.onSuccess?.call();
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      key: const ValueKey("login"),
       width: 320,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -116,15 +107,19 @@ class _LoginViewState extends State<LoginView> {
 
           // Button
           ElevatedButton(
-            onPressed: loading ? null : login,
+            onPressed: loading ? null : handleLogin,
             child: loading
-                ? const CircularProgressIndicator()
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text("Login"),
           ),
 
           const SizedBox(height: 12),
 
-          // Signup link
+          // Go to signup
           GestureDetector(
             onTap: widget.onSignup,
             child: const Text(
@@ -136,7 +131,7 @@ class _LoginViewState extends State<LoginView> {
           if (error != null) ...[
             const SizedBox(height: 10),
             Text(error!, style: const TextStyle(color: Colors.red)),
-          ]
+          ],
         ],
       ),
     );

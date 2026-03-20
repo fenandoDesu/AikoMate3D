@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:aikomate_flutter/core/api/signup_api.dart'; // <-- your signup()
 
 class SignupView extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback? onLogin;
+  final VoidCallback? onSuccess;
+  final VoidCallback onSignupSuccess;
 
   const SignupView({
     super.key,
     required this.onBack,
     this.onLogin,
+    this.onSuccess,
+    required this.onSignupSuccess
   });
 
   @override
@@ -22,50 +24,41 @@ class _SignupViewState extends State<SignupView> {
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
 
-  final storage = const FlutterSecureStorage();
-
   String? error;
   bool loading = false;
 
-  Future<void> signup() async {
+  Future<void> handleSignup() async {
+    if (nameController.text.isEmpty ||
+        emailController.text.isEmpty ||
+        passwordController.text.isEmpty) {
+      setState(() => error = "Fill all fields");
+      return;
+    }
+
     setState(() {
       loading = true;
       error = null;
     });
 
-    try {
-      final res = await http.post(
-        Uri.parse("https://api.japaneseblossom.com/auth/signup"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "name": nameController.text,
-          "email": emailController.text,
-          "password": passwordController.text,
-        }),
-      );
+    final result = await signup(
+      nameController.text.trim(),
+      emailController.text.trim(),
+      passwordController.text.trim(),
+    );
 
-      final data = jsonDecode(res.body);
+    if (!mounted) return;
 
-      if (res.statusCode != 200) {
-        setState(() {
-          error = data["detail"];
-        });
-        return;
-      }
-
-      // 🔐 store token (same as login)
-      await storage.write(key: "token", value: data["token"]);
-
-      // 👉 After signup, go back or switch to logged state later
-      widget.onBack();
-
-    } catch (e) {
+    if (!result.success) {
       setState(() {
-        error = "Network error";
+        error = result.error ?? "Signup failed";
+        loading = false;
       });
-    } finally {
-      setState(() => loading = false);
+      return;
     }
+
+    setState(() => loading = false);
+
+    widget.onSuccess?.call();
   }
 
   @override
@@ -81,7 +74,7 @@ class _SignupViewState extends State<SignupView> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 🔝 Header
+          // Header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -99,7 +92,7 @@ class _SignupViewState extends State<SignupView> {
 
           const SizedBox(height: 16),
 
-          // 👤 Name
+          // Name
           TextField(
             controller: nameController,
             style: const TextStyle(color: Colors.white),
@@ -111,7 +104,7 @@ class _SignupViewState extends State<SignupView> {
 
           const SizedBox(height: 12),
 
-          // 📧 Email
+          // Email
           TextField(
             controller: emailController,
             style: const TextStyle(color: Colors.white),
@@ -123,7 +116,7 @@ class _SignupViewState extends State<SignupView> {
 
           const SizedBox(height: 12),
 
-          // 🔒 Password
+          // Password
           TextField(
             controller: passwordController,
             obscureText: true,
@@ -136,9 +129,9 @@ class _SignupViewState extends State<SignupView> {
 
           const SizedBox(height: 20),
 
-          // 🔘 Button
+          // Button
           ElevatedButton(
-            onPressed: loading ? null : signup,
+            onPressed: loading ? null : handleSignup,
             child: loading
                 ? const SizedBox(
                     width: 18,
@@ -150,7 +143,7 @@ class _SignupViewState extends State<SignupView> {
 
           const SizedBox(height: 12),
 
-          // 🔁 Switch to login
+          // Go to login
           GestureDetector(
             onTap: widget.onLogin,
             child: const Text(

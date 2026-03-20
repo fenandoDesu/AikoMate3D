@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:convert';
 import 'ar_screen.dart';
-import '../../../reusable_widgets/glass.dart';
-import '../../../menu_sections_pages/login.dart';
-import '../../../menu_sections_pages/signup.dart';
+import 'package:aikomate_flutter/reusable_widgets/glass.dart';
+import 'package:aikomate_flutter/menu_sections_pages/login.dart';
+import 'package:aikomate_flutter/menu_sections_pages/signup.dart';
+import 'package:aikomate_flutter/menu_sections_pages/profile.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -13,7 +14,7 @@ class ViewerScreen extends StatefulWidget {
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
 
-enum OverlayView { menu, login, signup }
+enum OverlayView { menu, login, signup, profile }
 
 OverlayView _overlayView = OverlayView.menu;
 
@@ -101,13 +102,40 @@ class _ViewerScreenState extends State<ViewerScreen> {
           onSignup: () {
             setState(() => _overlayView = OverlayView.signup);
           },
+          onLoginSuccess: () {
+            setState(() {
+              _overlayView = OverlayView.profile;
+              _showOptions = false; // optional but nice UX
+            });
+          },
         );
-
       case OverlayView.signup:
         return SignupView(
           key: const ValueKey("signup"),
           onBack: () {
             setState(() => _overlayView = OverlayView.login);
+          },
+          onLogin: () {
+            setState(() => _overlayView = OverlayView.login);
+          },
+          onSignupSuccess: () {
+            setState(() {
+              _overlayView = OverlayView.profile;
+              _showOptions = false;
+            });
+          },
+        );
+      case OverlayView.profile:
+        return ProfileView(
+          key: const ValueKey("profile"),
+          onBack: () {
+            setState(() => _overlayView = OverlayView.menu);
+          },
+          onLogout: () {
+            setState(() {
+              _overlayView = OverlayView.menu;
+              _showOptions = false;
+            });
           },
         );
     }
@@ -173,7 +201,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
               icon: Icons.menu,
               onPressed: () {
                 setState(() {
-                  _showOptions = true; 
+                  _showOptions = true;
                   _overlayView = OverlayView.menu; // reset to menu
                 });
               },
