@@ -108,6 +108,68 @@
       }
     });
   </script>
+  <script>
+    (function () {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recognition = null;
+      let listening = false;
+
+      function notify(event, payload = {}) {
+        if (!window.flutter_inappwebview || !window.flutter_inappwebview.callHandler) {
+          return;
+        }
+        window.flutter_inappwebview.callHandler('FlutterBridge', JSON.stringify({
+          event,
+          ...payload
+        }));
+      }
+
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        recognition.lang = navigator.language || 'en-US';
+
+        recognition.onstart = () => {
+          listening = true;
+          notify('speechStarted');
+        };
+
+        recognition.onend = () => {
+          listening = false;
+          notify('speechEnded');
+        };
+
+        recognition.onerror = (event) => {
+          listening = false;
+          notify('speechError', { message: event.error || event.message || 'unknown' });
+        };
+
+        recognition.onresult = (event) => {
+          const result = event.results[event.resultIndex];
+          if (result && result[0]) {
+            notify('speechTranscript', {
+              transcript: result[0].transcript.trim(),
+              language: result[0].language || recognition.lang || 'en-US'
+            });
+          }
+        };
+      }
+
+      window.startSpeechRecognition = () => {
+        if (!recognition || listening) return false;
+        recognition.start();
+        return true;
+      };
+
+      window.isSpeechRecognitionSupported = () => !!recognition;
+      window.stopSpeechRecognition = () => {
+        recognition?.stop();
+        listening = false;
+      };
+    })();
+  </script>
 </body>
 
 </html>

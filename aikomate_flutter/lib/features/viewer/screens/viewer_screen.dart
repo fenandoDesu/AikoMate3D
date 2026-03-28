@@ -1,11 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'dart:convert';
+import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
 import 'ar_screen.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 import 'package:aikomate_flutter/menu_sections_pages/login.dart';
 import 'package:aikomate_flutter/menu_sections_pages/signup.dart';
 import 'package:aikomate_flutter/menu_sections_pages/profile.dart';
+import 'package:aikomate_flutter/core/api/auth_api.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -24,10 +28,31 @@ class _ViewerScreenState extends State<ViewerScreen> {
   final int _serverPort = 8080;
   bool _serverReady = false;
   bool _showOptions = false;
+  late final AiCompanionService _aiService;
+  final TextEditingController _messageController = TextEditingController();
+  StreamSubscription<String>? _logSubscription;
+  bool _speechSupported = false;
+  bool _isSpeechRecognitionActive = false;
+  String _speechLanguage = 'en-US';
+  String _statusLabel = '';
 
   @override
   void initState() {
     super.initState();
+    _aiService = AiCompanionService();
+    _logSubscription = _aiService.logStream.listen((message) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = message;
+      });
+    });
+    _aiService.ensureConnected().catchError((error) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = "AI companion unavailable";
+      });
+    });
+
     _startServer();
   }
 
@@ -39,6 +64,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   @override
   void dispose() {
+    _logSubscription?.cancel();
+    unawaited(_aiService.dispose());
+    _messageController.dispose();
     _localhostServer?.close();
     super.dispose();
   }
@@ -50,6 +78,154 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _controller?.evaluateJavascript(
       source: "window.onFlutterMessage('$message')",
     );
+  }
+
+  Future<void> _checkSpeechSupport() async {
+    final controller = _controller;
+    if (controller == null) return;
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '(window.isSpeechRecognitionSupported || (() => false))();',
+      );
+      if (!mounted) return;
+      setState(() {
+        _speechSupported = _truthy(result);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _speechSupported = false;
+      });
+    }
+  }
+
+  void _handleFlutterMessage(Map<String, dynamic> data) {
+    final event = data['event'];
+    switch (event) {
+      case 'ready':
+        _loadVRM();
+        unawaited(_checkSpeechSupport());
+        break;
+      case 'speechTranscript':
+        _handleSpeechTranscript(data);
+        break;
+      case 'speechStarted':
+        if (!mounted) return;
+        setState(() {
+          _isSpeechRecognitionActive = true;
+          _statusLabel = 'Listening...';
+        });
+        break;
+      case 'speechEnded':
+        if (!mounted) return;
+        setState(() => _isSpeechRecognitionActive = false);
+        break;
+      case 'speechError':
+        if (!mounted) return;
+        setState(() {
+          _isSpeechRecognitionActive = false;
+          _statusLabel = data['message'] ?? 'Speech recognition failed';
+        });
+        break;
+    }
+  }
+
+  void _handleSpeechTranscript(Map<String, dynamic> data) {
+    final transcript = (data['transcript'] as String?)?.trim();
+    if (transcript == null || transcript.isEmpty) return;
+    final language = data['language'] as String? ?? _speechLanguage;
+    if (!mounted) return;
+    setState(() {
+      _speechLanguage = language;
+      _messageController.text = transcript;
+      _messageController.selection =
+          TextSelection.collapsed(offset: transcript.length);
+    });
+    _sendMessageFromText(triggeredBySpeech: true);
+  }
+
+  bool _truthy(dynamic value) => value == true || value == 'true';
+
+  void _sendMessageFromText({bool triggeredBySpeech = false}) {
+    final text = _messageController.text.trim();
+    if (text.isEmpty) return;
+
+    if (mounted) {
+      setState(() {
+        _statusLabel = 'Sending...';
+      });
+    }
+
+    unawaited(
+      _aiService
+          .sendMessage(text: text, language: _speechLanguage)
+          .then((_) {
+            if (!mounted) return;
+            setState(() {
+              _statusLabel = 'Awaiting response...';
+            });
+          })
+          .catchError((error) {
+            if (!mounted) return;
+            setState(() {
+              _statusLabel = 'Companion unavailable';
+            });
+          }),
+    );
+
+    _messageController.clear();
+  }
+
+  Future<void> _startSpeechRecognition() async {
+    if (!_speechSupported) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = 'Speech recognition unavailable';
+      });
+      return;
+    }
+
+    if (_isSpeechRecognitionActive) return;
+
+    try {
+      final result = await _controller?.evaluateJavascript(
+        source:
+            'typeof window.startSpeechRecognition === \"function\" && window.startSpeechRecognition();',
+      );
+      if (!mounted) return;
+      if (!_truthy(result)) {
+        setState(() {
+          _statusLabel = 'Speech recognition failed to start';
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = 'Speech recognition error';
+      });
+    }
+  }
+
+  String _buildStatusHint(AiCompanionConnectionState state) {
+    final label = _connectionLabel(state);
+    final pieces = <String>[];
+    if (label.isNotEmpty) pieces.add(label);
+    if (_statusLabel.isNotEmpty) pieces.add(_statusLabel);
+    return pieces.join(' · ');
+  }
+
+  String _connectionLabel(AiCompanionConnectionState state) {
+    switch (state) {
+      case AiCompanionConnectionState.connecting:
+        return 'Connecting to companion';
+      case AiCompanionConnectionState.ready:
+        return 'Companion ready';
+      case AiCompanionConnectionState.error:
+        return 'Companion error';
+      case AiCompanionConnectionState.idle:
+      default:
+        return '';
+    }
   }
 
   Widget _buildOption(IconData icon, {VoidCallback? onTap}) {
@@ -78,8 +254,20 @@ class _ViewerScreenState extends State<ViewerScreen> {
             children: [
               _buildOption(
                 Icons.account_circle_outlined,
-                onTap: () {
-                  setState(() => _overlayView = OverlayView.login);
+                onTap: () async {
+                  final result = await auth();
+
+                  if (!mounted) return;
+
+                  if (result.success) {
+                    setState(() {
+                      _overlayView = OverlayView.profile;
+                    });
+                  } else {
+                    setState(() {
+                      _overlayView = OverlayView.login;
+                    });
+                  }
                 },
               ),
               _buildOption(Icons.shopping_bag_outlined),
@@ -105,7 +293,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
           onLoginSuccess: () {
             setState(() {
               _overlayView = OverlayView.profile;
-              _showOptions = false; // optional but nice UX
+              _showOptions = true; // optional but nice UX
             });
           },
         );
@@ -121,7 +309,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
           onSignupSuccess: () {
             setState(() {
               _overlayView = OverlayView.profile;
-              _showOptions = false;
+              _showOptions = true;
             });
           },
         );
@@ -166,9 +354,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
               controller.addJavaScriptHandler(
                 handlerName: 'FlutterBridge',
                 callback: (args) {
-                  final data = jsonDecode(args[0]);
-                  debugPrint('JS → Flutter: ${data['event']}');
-                  if (data['event'] == 'ready') _loadVRM();
+                  if (args.isEmpty) return;
+                  try {
+                    final data = jsonDecode(args[0]);
+                    debugPrint('JS -> Flutter: ${data['event']}');
+                    _handleFlutterMessage(data);
+                  } catch (error) {
+                    debugPrint('JS bridge error: $error');
+                  }
                 },
               );
             },
@@ -235,29 +428,58 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: GlassContainer(
                   style: GlassPresets.chatBar,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: "Type a message...",
-                            hintStyle: TextStyle(color: Colors.white70),
-                            border: InputBorder.none,
+                  child: ValueListenableBuilder<AiCompanionConnectionState>(
+                    valueListenable: _aiService.connectionState,
+                    builder: (context, state, _) {
+                      final hint = _buildStatusHint(state);
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (hint.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8.0),
+                              child: Text(
+                                hint,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _messageController,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: const InputDecoration(
+                                    hintText: "Type a message...",
+                                    hintStyle: TextStyle(color: Colors.white70),
+                                    border: InputBorder.none,
+                                  ),
+                                  onSubmitted: (_) => _sendMessageFromText(),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.send),
+                                color: Colors.white.withOpacity(0.9),
+                                onPressed: _sendMessageFromText,
+                              ),
+                              IconButton(
+                                icon: Icon(
+                                  Icons.mic,
+                                  color: _isSpeechRecognitionActive
+                                      ? Colors.redAccent
+                                      : Colors.white.withOpacity(0.9),
+                                ),
+                                onPressed: _startSpeechRecognition,
+                              ),
+                            ],
                           ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.send),
-                        color: Colors.white.withOpacity(0.9),
-                        onPressed: () {},
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.mic),
-                        color: Colors.white.withOpacity(0.9),
-                        onPressed: () {},
-                      ),
-                    ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),

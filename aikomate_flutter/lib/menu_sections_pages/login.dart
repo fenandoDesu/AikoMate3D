@@ -49,7 +49,7 @@ class _LoginViewState extends State<LoginView> {
 
     setState(() => loading = false);
 
-    widget.onSuccess?.call();
+    widget.onLoginSuccess();
   }
 
   @override

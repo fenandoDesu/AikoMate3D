@@ -39,6 +39,8 @@ dependencies:
   permission_handler: ^11.0.0
   http: ^0.13.6
   flutter_secure_storage: ^9.0.0
+  audioplayers: ^1.1.1
+  web_socket_channel: ^2.4.0
 
 dev_dependencies:
   flutter_test:
@@ -97,3 +99,7 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+dependency_overrides:
+  audioplayers_android:
+    path: third_party/audioplayers_android
