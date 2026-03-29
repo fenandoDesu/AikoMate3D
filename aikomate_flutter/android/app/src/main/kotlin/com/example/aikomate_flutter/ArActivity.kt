@@ -49,6 +49,8 @@ class ArActivity : AppCompatActivity() {
         private const val MODEL_PATH = "models/UltimateLoverH1.glb"
     }
 
+    data class Phoneme(val phoneme: String, val start: Double, val duration: Double)
+
     private lateinit var arFragment: ArFragment
     private lateinit var hudTextView: TextView
 
@@ -74,6 +76,8 @@ class ArActivity : AppCompatActivity() {
     private var audioTrack: AudioTrack? = null
     private var audioThread: Thread? = null
     private val audioQueue = LinkedBlockingQueue<ByteArray>()
+    private val phonemeTimeline = mutableListOf<Phoneme>()
+    private var phonemeAudioDurationSec = 0.0
 
     private var idleAnimator: VrmIdleAnimator? = null
     private var elapsedTimeSec = 0f
@@ -457,7 +461,12 @@ class ArActivity : AppCompatActivity() {
                     audioQueue.clear()
                     audioTrack?.pause()
                     audioTrack?.flush()
+                    phonemeTimeline.clear()
+                    phonemeAudioDurationSec = 0.0
                     Log.d(TAG, "Companion stream_start")
+                }
+                "sentence_chunk" -> {
+                    handleSentenceChunk(json)
                 }
                 "sentence_audio_end" -> {
                     Log.d(TAG, "Companion sentence_audio_end")
@@ -474,9 +483,40 @@ class ArActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleSentenceChunk(json: JSONObject) {
+        val phonemes = json.optJSONArray("phonemes") ?: return
+        var offset = 0.0
+        if (phonemeTimeline.isNotEmpty()) {
+            val last = phonemeTimeline.last()
+            offset = last.start + last.duration
+        }
+        for (i in 0 until phonemes.length()) {
+            val p = phonemes.optJSONObject(i) ?: continue
+            val phoneme = p.optString("phoneme", "")
+            val start = p.optDouble("start", Double.NaN)
+            val duration = p.optDouble("duration", Double.NaN)
+            if (phoneme.isBlank() || start.isNaN() || duration.isNaN()) continue
+            phonemeTimeline.add(
+                Phoneme(
+                    phoneme = phoneme,
+                    start = start + offset,
+                    duration = duration
+                )
+            )
+        }
+
+        onPhonemesUpdated()
+    }
+
+    private fun onPhonemesUpdated() {
+        // Foundation hook for future lip-sync on the native VRM.
+        Log.d(TAG, "Phonemes updated: ${phonemeTimeline.size} entries, audioDuration=$phonemeAudioDurationSec")
+    }
+
     private fun handleAudio(bytes: ByteArray) {
         if (bytes.isEmpty()) return
         ensureAudioTrack()
+        phonemeAudioDurationSec += bytes.size / 2.0 / 44100.0
         audioQueue.offer(bytes)
         if (audioTrack?.playState != AudioTrack.PLAYSTATE_PLAYING) {
             audioTrack?.play()

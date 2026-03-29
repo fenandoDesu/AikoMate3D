@@ -78,6 +78,64 @@ class GlassPresets {
       ],
     ),
   );
+
+  static final panel = GlassStyle(
+    radius: 22,
+    gradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        const Color.fromARGB(255, 40, 40, 40).withOpacity(0.45),
+        const Color.fromARGB(255, 90, 90, 90).withOpacity(0.25),
+      ],
+    ),
+    shadows: [
+      BoxShadow(
+        color: const Color.fromARGB(255, 20, 20, 20).withOpacity(0.7),
+        blurRadius: 8,
+        offset: const Offset(0, 6),
+        spreadRadius: -6,
+      ),
+    ],
+    border: Border.all(color: Colors.white.withOpacity(0.22), width: 1.1),
+    innerGradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomCenter,
+      colors: [
+        const Color.fromARGB(255, 20, 20, 20).withOpacity(0.35),
+        Colors.transparent,
+      ],
+    ),
+  );
+
+  static final card = GlassStyle(
+    radius: 16,
+    gradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        const Color.fromARGB(255, 60, 60, 60).withOpacity(0.35),
+        const Color.fromARGB(255, 30, 30, 30).withOpacity(0.2),
+      ],
+    ),
+    shadows: [
+      BoxShadow(
+        color: const Color.fromARGB(255, 12, 12, 12).withOpacity(0.6),
+        blurRadius: 6,
+        offset: const Offset(0, 4),
+        spreadRadius: -4,
+      ),
+    ],
+    border: Border.all(color: Colors.white.withOpacity(0.18), width: 1.0),
+    innerGradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        const Color.fromARGB(255, 22, 22, 22).withOpacity(0.2),
+        Colors.transparent,
+      ],
+    ),
+  );
 }
 
 class GlassContainer extends StatelessWidget {

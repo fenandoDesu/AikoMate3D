@@ -12,6 +12,7 @@ import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 import 'package:aikomate_flutter/menu_sections_pages/login.dart';
 import 'package:aikomate_flutter/menu_sections_pages/signup.dart';
 import 'package:aikomate_flutter/menu_sections_pages/profile.dart';
+import 'package:aikomate_flutter/menu_sections_pages/history.dart';
 import 'package:aikomate_flutter/core/api/auth_api.dart';
 
 class ViewerScreen extends StatefulWidget {
@@ -21,7 +22,7 @@ class ViewerScreen extends StatefulWidget {
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
 
-enum OverlayView { menu, login, signup, profile }
+enum OverlayView { menu, login, signup, profile, history, background }
 
 OverlayView _overlayView = OverlayView.menu;
 
@@ -35,10 +36,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
   late final AiCompanionService _aiService;
   final TextEditingController _messageController = TextEditingController();
   StreamSubscription<String>? _logSubscription;
+  StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _speechSupported = false;
   bool _isSpeechRecognitionActive = false;
   String _speechLanguage = 'en-US';
   String _statusLabel = '';
+  final List<Map<String, dynamic>> _pendingWebEvents = [];
 
   @override
   void initState() {
@@ -49,6 +52,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
       setState(() {
         _statusLabel = message;
       });
+    });
+    _eventSubscription = _aiService.eventStream.listen((event) {
+      final controller = _controller;
+      if (controller == null) {
+        _pendingWebEvents.add(event);
+        return;
+      }
+      _sendWebEvent(controller, event);
     });
     _aiService.ensureConnected().catchError((error) {
       if (!mounted) return;
@@ -69,6 +80,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   @override
   void dispose() {
     _logSubscription?.cancel();
+    _eventSubscription?.cancel();
     unawaited(_aiService.dispose());
     _messageController.dispose();
     _localhostServer?.close();
@@ -82,6 +94,26 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _controller?.evaluateJavascript(
       source: "window.onFlutterMessage('$message')",
     );
+  }
+
+  void _sendWebEvent(
+    InAppWebViewController controller,
+    Map<String, dynamic> event,
+  ) {
+    final payload = jsonEncode(event);
+    controller.evaluateJavascript(
+      source: "window.onFlutterMessage('$payload')",
+    );
+  }
+
+  void _flushPendingWebEvents() {
+    final controller = _controller;
+    if (controller == null || _pendingWebEvents.isEmpty) return;
+    final pending = List<Map<String, dynamic>>.from(_pendingWebEvents);
+    _pendingWebEvents.clear();
+    for (final event in pending) {
+      _sendWebEvent(controller, event);
+    }
   }
 
   Future<void> _checkSpeechSupport() async {
@@ -109,6 +141,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       case 'ready':
         _loadVRM();
         unawaited(_checkSpeechSupport());
+        _flushPendingWebEvents();
         break;
       case 'speechTranscript':
         _handleSpeechTranscript(data);
@@ -142,8 +175,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     setState(() {
       _speechLanguage = language;
       _messageController.text = transcript;
-      _messageController.selection =
-          TextSelection.collapsed(offset: transcript.length);
+      _messageController.selection = TextSelection.collapsed(
+        offset: transcript.length,
+      );
     });
     _sendMessageFromText(triggeredBySpeech: true);
   }
@@ -315,8 +349,30 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 },
               ),
               _buildOption(Icons.shopping_bag_outlined),
-              _buildOption(Icons.wallpaper_outlined),
-              _buildOption(Icons.question_answer_outlined),
+              _buildOption(
+                Icons.wallpaper_outlined,
+                onTap: () async {
+                  setState(() {
+                    _overlayView = OverlayView.background;
+                  });
+                },
+              ),
+              _buildOption(
+                Icons.question_answer_outlined,
+                onTap: () async {
+                  final result = await auth();
+
+                  if (result.success) {
+                    setState(() {
+                      _overlayView = OverlayView.history;
+                    });
+                  } else {
+                    setState(() {
+                      _overlayView = OverlayView.login;
+                    });
+                  }
+                },
+              ),
               _buildOption(Icons.diversity_1_outlined),
               _buildOption(Icons.record_voice_over_outlined),
               _buildOption(Icons.translate_outlined),
@@ -370,6 +426,13 @@ class _ViewerScreenState extends State<ViewerScreen> {
             });
           },
         );
+      case OverlayView.history:
+        return HistoryView(
+          key: const ValueKey("history"),
+          onBack: () {
+            setState(() => _overlayView = OverlayView.menu);
+          },
+        );
     }
   }
 
@@ -395,6 +458,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
             ),
             onWebViewCreated: (controller) {
               _controller = controller;
+              if (_pendingWebEvents.isNotEmpty) {
+                final pending = List<Map<String, dynamic>>.from(
+                  _pendingWebEvents,
+                );
+                _pendingWebEvents.clear();
+                for (final event in pending) {
+                  _sendWebEvent(controller, event);
+                }
+              }
               controller.addJavaScriptHandler(
                 handlerName: 'FlutterBridge',
                 callback: (args) {
@@ -508,9 +580,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
                               IconButton(
                                 icon: Icon(
                                   Icons.mic,
-                                  color: _isSpeechRecognitionActive
-                                      ? Colors.redAccent
-                                      : Colors.white.withOpacity(0.9),
+                                  color:
+                                      _isSpeechRecognitionActive
+                                          ? Colors.redAccent
+                                          : Colors.white.withOpacity(0.9),
                                 ),
                                 onPressed: _startSpeechRecognition,
                               ),

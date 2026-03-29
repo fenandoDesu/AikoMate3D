@@ -67,6 +67,135 @@ let vrmFactor = 1;
 const clock = new THREE.Clock();
 let elapsedTime = 0;
 
+// --- Lip sync (phonemes) ---
+let currentSpeech = null;
+let isSpeaking = false;
+let speechStartTime = 0;
+let phonemeLastTime = 0;
+const speechMouth = { aa: 0, ih: 0, ee: 0, oh: 0, ou: 0 };
+const mouthPose = { aa: 0, ih: 0, ee: 0, oh: 0, ou: 0 };
+
+function applySpeechPauses(phonemes, audioDuration = 0) {
+  if (!Array.isArray(phonemes)) return [];
+  const pauseMap = new Map([
+    [".", 500],
+    ["?", 500],
+    ["...", 500],
+    ["[pause]", 500],
+    [",", 300],
+    ["-", 300],
+    ["[long pause]", 700],
+  ]);
+
+  let delay = 0;
+  let out = [];
+
+  for (const p of phonemes) {
+    const key = (p?.phoneme || "").trim().toLowerCase();
+    const pause = pauseMap.get(key);
+    if (pause) {
+      delay += pause / 1000;
+      continue;
+    }
+    if (p && typeof p.start === "number" && typeof p.duration === "number") {
+      out.push({
+        ...p,
+        start: p.start + delay,
+        duration: p.duration,
+      });
+    }
+  }
+
+  const endTime = out.length
+    ? out[out.length - 1].start + out[out.length - 1].duration
+    : 0;
+
+  if (audioDuration > 0 && endTime > 0) {
+    const scale = audioDuration / endTime;
+    out = out.map((p) => ({
+      ...p,
+      start: p.start * scale,
+      duration: p.duration * scale,
+    }));
+  }
+
+  return out;
+}
+
+function startSpeech(phonemes, audioDuration = 0) {
+  if (!currentVRM || !currentVRM.expressionManager) return;
+  currentSpeech = applySpeechPauses(phonemes, audioDuration);
+  isSpeaking = true;
+  speechStartTime = performance.now() / 1000;
+  phonemeLastTime = speechStartTime;
+  requestAnimationFrame(stepPhonemes);
+}
+
+function updatePhonemes(phonemes, audioDuration = 0) {
+  if (!currentSpeech) return;
+  currentSpeech = applySpeechPauses(phonemes, audioDuration);
+}
+
+function endSpeech() {
+  isSpeaking = false;
+  currentSpeech = null;
+}
+
+function stepPhonemes(nowMs) {
+  if (!currentVRM || !currentVRM.expressionManager || !isSpeaking) return;
+  const now = nowMs / 1000;
+  const delta = Math.min(now - phonemeLastTime, 0.033);
+  phonemeLastTime = now;
+  const elapsed = now - speechStartTime;
+
+  speechMouth.aa = 0;
+  speechMouth.ih = 0;
+  speechMouth.ee = 0;
+  speechMouth.oh = 0;
+  speechMouth.ou = 0;
+
+  if (currentSpeech) {
+    for (const p of currentSpeech) {
+      if (elapsed >= p.start && elapsed < p.start + p.duration) {
+        const strength = 1.0 - (elapsed - p.start) / p.duration;
+        const phoneme = (p.phoneme || "").toUpperCase();
+        let vrmViseme = "aa";
+
+        switch (phoneme) {
+          case "A": vrmViseme = "aa"; break;
+          case "E": vrmViseme = "ee"; break;
+          case "I": vrmViseme = "ih"; break;
+          case "O": vrmViseme = "oh"; break;
+          case "U": vrmViseme = "ou"; break;
+          case "B":
+          case "P":
+          case "M": vrmViseme = "ou"; break;
+          case "S": vrmViseme = "ih"; break;
+          case "T": vrmViseme = "ee"; break;
+          case "K": vrmViseme = "oh"; break;
+          case "L": vrmViseme = "ee"; break;
+          case "R": vrmViseme = "ou"; break;
+          default: vrmViseme = "aa";
+        }
+
+        const maxStrength = 0.7;
+        const target = Math.min(strength * 0.9, maxStrength);
+        speechMouth[vrmViseme] = Math.max(speechMouth[vrmViseme], target);
+      }
+    }
+  }
+
+  for (const v of ["aa", "ih", "ee", "oh", "ou"]) {
+    const target = isSpeaking ? speechMouth[v] : mouthPose[v];
+    const current = currentVRM.expressionManager.getValue(v) ?? 0;
+    const smooth = current + (target - current) * delta * 12;
+    currentVRM.expressionManager.setValue(v, smooth);
+  }
+
+  currentVRM.expressionManager.update();
+  if (isSpeaking) requestAnimationFrame(stepPhonemes);
+}
+
 // ─── AR State (WebXR path — unused in overlay mode) ──────────────────────────
 let xrSession = null;
 let xrHitTestSource = null;
@@ -157,6 +286,18 @@ window.onFlutterMessage = (jsonString) => {
       currentVRM.scene.visible = true;
       avatarPlaced = true;
     }
+  }
+
+  if (data.event === 'start_speech') {
+    startSpeech(data.phonemes || [], data.audioDuration || 0);
+  }
+
+  if (data.event === 'update_phonemes') {
+    updatePhonemes(data.phonemes || [], data.audioDuration || 0);
+  }
+
+  if (data.event === 'end_speech') {
+    endSpeech();
   }
 };
 

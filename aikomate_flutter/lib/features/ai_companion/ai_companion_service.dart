@@ -21,6 +21,8 @@ class AiCompanionService {
   final ValueNotifier<AiCompanionConnectionState> connectionState =
       ValueNotifier(AiCompanionConnectionState.idle);
   final StreamController<String> _logController = StreamController.broadcast();
+  final StreamController<Map<String, dynamic>> _eventController =
+      StreamController.broadcast();
 
   final String avatarName;
   final String userName;
@@ -31,9 +33,17 @@ class AiCompanionService {
   final AudioPlayer _player = AudioPlayer();
   StreamSubscription? _playerSubscription;
   final List<Uint8List> _audioQueue = [];
+  final List<double> _audioDurationQueue = [];
   final List<int> _pendingAudio = [];
   bool _isPlaying = false;
   bool _disposed = false;
+  bool _audioStarted = false;
+  bool _streamEnded = false;
+  double _queuedAudioDuration = 0.0;
+  double _audioDurationAccum = 0.0;
+  List<Map<String, dynamic>> _fullPhonemes = [];
+  Map<String, dynamic>? _pendingStartSpeech;
+  String _replyText = '';
 
   AiCompanionService({
     this.avatarName = "Haruna",
@@ -44,6 +54,12 @@ class AiCompanionService {
   }
 
   Stream<String> get logStream => _logController.stream;
+  Stream<Map<String, dynamic>> get eventStream => _eventController.stream;
+
+  void _emitEvent(Map<String, dynamic> event) {
+    if (_disposed) return;
+    _eventController.add(event);
+  }
 
   Future<void> ensureConnected() async {
     if (_disposed) return;
@@ -151,23 +167,97 @@ class AiCompanionService {
         print('Companion WS: stream_start');
         _pendingAudio.clear();
         _audioQueue.clear();
+        _audioDurationQueue.clear();
         _isPlaying = false;
+        _audioStarted = false;
+        _streamEnded = false;
+        _queuedAudioDuration = 0.0;
+        _audioDurationAccum = 0.0;
+        _fullPhonemes = [];
+        _pendingStartSpeech = null;
+        _replyText = '';
         _player.stop();
+        break;
+      case "sentence_chunk":
+        _handleSentenceChunk(message);
         break;
       case "sentence_audio_end":
         print('Companion WS: sentence_audio_end');
+        if (message["is_last"] == true) {
+          _streamEnded = true;
+        }
         _flushPendingAudio();
         break;
       case "turn_end":
         print('Companion WS: turn_end');
+        _streamEnded = true;
         _flushPendingAudio();
+        _maybeEndSpeech();
         break;
       case "error":
         _logController.add("Server error: ${message["message"]}");
         _pendingAudio.clear();
         _audioQueue.clear();
+        _audioDurationQueue.clear();
         break;
     }
+  }
+
+  void _handleSentenceChunk(Map<String, dynamic> message) {
+    final text = message["text"] as String? ?? '';
+    if (text.isNotEmpty) {
+      _replyText = '$_replyText $text'.trim();
+    }
+
+    final phonemeList = message["phonemes"] as List<dynamic>? ?? [];
+    double offset = 0.0;
+    if (_fullPhonemes.isNotEmpty) {
+      final last = _fullPhonemes.last;
+      offset =
+          (last["start"] as num).toDouble() + (last["duration"] as num).toDouble();
+    }
+
+    for (final raw in phonemeList) {
+      if (raw is! Map) continue;
+      final phoneme = raw["phoneme"]?.toString();
+      final start = raw["start"];
+      final duration = raw["duration"];
+      if (phoneme == null || start is! num || duration is! num) continue;
+      _fullPhonemes.add({
+        "phoneme": phoneme,
+        "start": start.toDouble() + offset,
+        "duration": duration.toDouble(),
+      });
+    }
+
+    final phonemeSnapshot =
+        List<Map<String, dynamic>>.from(_fullPhonemes);
+    if (_pendingStartSpeech == null && !_audioStarted) {
+      _pendingStartSpeech = {
+        "event": "start_speech",
+        "phonemes": phonemeSnapshot,
+        "reply_text": _replyText.trim(),
+        "audioDuration": _audioDurationAccum + _queuedAudioDuration,
+      };
+    } else if (_audioStarted) {
+      _emitEvent({
+        "event": "update_phonemes",
+        "phonemes": phonemeSnapshot,
+        "audioDuration": _audioDurationAccum + _queuedAudioDuration,
+      });
+    }
+  }
+
+  void _maybeEndSpeech() {
+    if (!_streamEnded) return;
+    if (_isPlaying || _audioQueue.isNotEmpty) return;
+    _emitEvent({
+      "event": "end_speech",
+      "reply_text": _replyText.trim(),
+    });
+    _streamEnded = false;
+    _audioStarted = false;
+    _pendingStartSpeech = null;
   }
 
   void _flushPendingAudio() {
@@ -183,7 +273,19 @@ class AiCompanionService {
     }
 
     final wav = _buildWav(pcm, sampleRate: _defaultSampleRate);
+    final durationSec = pcm.length / 2 / _defaultSampleRate;
     _audioQueue.add(wav);
+    _audioDurationQueue.add(durationSec);
+    _queuedAudioDuration += durationSec;
+    if (!_audioStarted) {
+      _audioStarted = true;
+      if (_pendingStartSpeech != null) {
+        _pendingStartSpeech!["audioDuration"] =
+            _audioDurationAccum + _queuedAudioDuration;
+        _emitEvent(_pendingStartSpeech!);
+        _pendingStartSpeech = null;
+      }
+    }
     _schedulePlayNext();
   }
 
@@ -276,9 +378,16 @@ class AiCompanionService {
 
   void _handlePlaybackComplete() {
     _isPlaying = false;
+    if (_audioDurationQueue.isNotEmpty) {
+      final duration = _audioDurationQueue.removeAt(0);
+      _audioDurationAccum += duration;
+      _queuedAudioDuration =
+          math.max(0.0, _queuedAudioDuration - duration);
+    }
     if (_audioQueue.isNotEmpty) {
       _schedulePlayNext();
     }
+    _maybeEndSpeech();
   }
 
   void _handleDone() {
@@ -300,6 +409,7 @@ class AiCompanionService {
     await _playerSubscription?.cancel();
     await _wsSubscription?.cancel();
     await _logController.close();
+    await _eventController.close();
     connectionState.dispose();
     await _channel?.sink.close();
     _channel = null;
