@@ -3,8 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
-import 'ar_screen.dart';
+import 'package:aikomate_flutter/core/config/env.dart';
+import 'package:aikomate_flutter/core/storage/secure_storage.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 import 'package:aikomate_flutter/menu_sections_pages/login.dart';
 import 'package:aikomate_flutter/menu_sections_pages/signup.dart';
@@ -23,6 +26,7 @@ enum OverlayView { menu, login, signup, profile }
 OverlayView _overlayView = OverlayView.menu;
 
 class _ViewerScreenState extends State<ViewerScreen> {
+  static const _arChannel = MethodChannel('com.aikomate/ar');
   InAppWebViewController? _controller;
   InAppLocalhostServer? _localhostServer;
   final int _serverPort = 8080;
@@ -146,6 +150,13 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   bool _truthy(dynamic value) => value == true || value == 'true';
 
+  Future<bool> _ensureMicPermission() async {
+    final status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+    final result = await Permission.microphone.request();
+    return result.isGranted;
+  }
+
   void _sendMessageFromText({bool triggeredBySpeech = false}) {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
@@ -177,6 +188,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   Future<void> _startSpeechRecognition() async {
+    final micOk = await _ensureMicPermission();
+    if (!micOk) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = 'Microphone permission required';
+      });
+      return;
+    }
+
     if (!_speechSupported) {
       if (!mounted) return;
       setState(() {
@@ -190,7 +210,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     try {
       final result = await _controller?.evaluateJavascript(
         source:
-            'typeof window.startSpeechRecognition === \"function\" && window.startSpeechRecognition();',
+            'typeof window.startSpeechRecognition === "function" && window.startSpeechRecognition();',
       );
       if (!mounted) return;
       if (!_truthy(result)) {
@@ -202,6 +222,30 @@ class _ViewerScreenState extends State<ViewerScreen> {
       if (!mounted) return;
       setState(() {
         _statusLabel = 'Speech recognition error';
+      });
+    }
+  }
+
+  Future<void> _openAR() async {
+    try {
+      final token = await SecureStorage.getToken();
+      if (token == null) {
+        if (!mounted) return;
+        setState(() {
+          _statusLabel = 'Missing auth token';
+        });
+        return;
+      }
+      await _arChannel.invokeMethod('openAR', {
+        'token': token,
+        'wsUrl': Env.chatWsUrl,
+        'avatarName': _aiService.avatarName,
+        'userName': _aiService.userName,
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = 'Failed to open AR';
       });
     }
   }
@@ -411,12 +455,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
               radius: 15,
               style: GlassPresets.button,
               icon: Icons.view_in_ar,
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ArScreen()),
-                );
-              },
+              onPressed: _openAR,
             ),
           ),
           Positioned(

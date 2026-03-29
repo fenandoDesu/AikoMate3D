@@ -32,12 +32,14 @@ android {
         }
     }
 
-    dependencies {
-        implementation("com.gorisse.thomas.sceneform:ux:1.23.0")
-        implementation("com.google.ar:core:1.31.0")
-        implementation("androidx.appcompat:appcompat:1.7.1")
-        implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
-    }
+}
+
+dependencies {
+    implementation("com.gorisse.thomas.sceneform:ux:1.23.0")
+    implementation("com.google.ar:core:1.31.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 
 flutter {

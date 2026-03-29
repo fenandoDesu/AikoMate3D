@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
@@ -217,7 +218,23 @@ class _ArScreenState extends State<ArScreen> {
     );
   }
 
+  Future<bool> _ensureMicPermission() async {
+    final status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+    final result = await Permission.microphone.request();
+    return result.isGranted;
+  }
+
   Future<void> _startSpeechRecognition() async {
+    final micOk = await _ensureMicPermission();
+    if (!micOk) {
+      if (!mounted) return;
+      setState(() {
+        _statusLabel = 'Microphone permission required';
+      });
+      return;
+    }
+
     if (!_speechSupported) {
       if (!mounted) return;
       setState(() {
@@ -231,7 +248,7 @@ class _ArScreenState extends State<ArScreen> {
     try {
       final result = await _speechController?.evaluateJavascript(
         source:
-            'typeof window.startSpeechRecognition === \"function\" && window.startSpeechRecognition();',
+            'typeof window.startSpeechRecognition === "function" && window.startSpeechRecognition();',
       );
       if (!mounted) return;
       if (!_truthy(result)) {

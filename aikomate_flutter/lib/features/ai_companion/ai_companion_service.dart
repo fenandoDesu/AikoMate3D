@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:aikomate_flutter/core/config/env.dart';
@@ -15,7 +15,8 @@ enum AiCompanionConnectionState { idle, connecting, ready, error }
 /// Manages the connection with the companion WS endpoint and plays the
 /// streamed audio as soon as it completes.
 class AiCompanionService {
-  static const _defaultSampleRate = 48000;
+  /// Fish Audio sends 16-bit LE mono PCM at 44.1 kHz.
+  static const _defaultSampleRate = 44100;
 
   final ValueNotifier<AiCompanionConnectionState> connectionState =
       ValueNotifier(AiCompanionConnectionState.idle);
@@ -36,7 +37,7 @@ class AiCompanionService {
 
   AiCompanionService({
     this.avatarName = "Haruna",
-    this.userName = "Guest",
+    this.userName = "Fernando",
   }) {
     _playerSubscription =
         _player.onPlayerComplete.listen((_) => _handlePlaybackComplete());
@@ -67,23 +68,37 @@ class AiCompanionService {
     if (_channel == null) {
       throw StateError("WebSocket not available");
     }
+    final fishAudioId = "a2fcdd688eed4521baf39ffc05ca7d3f";
+    final intimacyLevel = 4;
 
     final payload = jsonEncode({
       "text": text,
       "language": language,
       "avatar_name": avatarName,
       "user_name": userName,
+      "fish_audio_id": fishAudioId,
+      "intimacy": intimacyLevel,
     });
 
-    try {
+    Future<void> attemptSend() async {
+      print('Companion WS send -> "$text" [$language]');
       _channel!.sink.add(payload);
       _logController.add("Sent text: $text");
       _pendingAudio.clear();
+    }
+
+    try {
+      await attemptSend();
     } catch (error) {
-      _logController.add("Send failed: $error");
+      // Retry once after forcing a reconnect (helps if AR reopens after idle).
+      _logController.add("Send failed, retrying: $error");
       _channel = null;
       connectionState.value = AiCompanionConnectionState.idle;
-      rethrow;
+      await ensureConnected();
+      if (_channel == null) {
+        throw StateError("WebSocket not available after retry");
+      }
+      await attemptSend();
     }
   }
 
@@ -114,11 +129,15 @@ class AiCompanionService {
   void _handleRawMessage(dynamic data) {
     if (_disposed) return;
     if (data is String) {
+      final textPreview = data.toString();
+      final preview = textPreview.substring(0, math.min(120, textPreview.length));
+      print('Companion WS text msg: $preview');
       _handleJsonMessage(jsonDecode(data));
       return;
     }
 
     if (data is List<int>) {
+      print('Companion WS binary chunk: ${data.length} bytes');
       _pendingAudio.addAll(data);
     }
   }
@@ -129,15 +148,18 @@ class AiCompanionService {
 
     switch (type) {
       case "stream_start":
+        print('Companion WS: stream_start');
         _pendingAudio.clear();
         _audioQueue.clear();
         _isPlaying = false;
         _player.stop();
         break;
       case "sentence_audio_end":
+        print('Companion WS: sentence_audio_end');
         _flushPendingAudio();
         break;
       case "turn_end":
+        print('Companion WS: turn_end');
         _flushPendingAudio();
         break;
       case "error":
@@ -152,6 +174,7 @@ class AiCompanionService {
     if (_pendingAudio.isEmpty) return;
     final buffer = Uint8List.fromList(_pendingAudio);
     _pendingAudio.clear();
+    print('Companion flush audio: ${buffer.length} bytes');
 
     final pcm = _extractPlayablePcm(buffer);
     if (pcm == null) {
@@ -166,9 +189,11 @@ class AiCompanionService {
 
   Uint8List? _extractPlayablePcm(Uint8List bytes) {
     if (bytes.isEmpty) return null;
-    final floatCandidate = _tryFloat32(bytes);
-    if (floatCandidate != null) return floatCandidate;
-    return _tryInt16(bytes);
+    // Fish Audio sends int16 PCM; try that first so we don't accidentally
+    // halve the sample count by reinterpreting as float32.
+    final int16 = _tryInt16(bytes);
+    if (int16 != null) return int16;
+    return _tryFloat32(bytes);
   }
 
   Uint8List? _tryFloat32(Uint8List bytes) {
@@ -177,7 +202,7 @@ class AiCompanionService {
     final count = bytes.length ~/ 4;
     if (count < 4) return null;
     final floatBuffer = Float32List.view(bytes.buffer, bytes.offsetInBytes, count);
-    final maxAbs = floatBuffer.fold<double>(0.0, (prev, value) => max(prev, value.abs()));
+    final maxAbs = floatBuffer.fold<double>(0.0, (prev, value) => math.max(prev, value.abs()));
     if (maxAbs <= 0.01) return null;
 
     final output = Int16List(count);
@@ -197,7 +222,7 @@ class AiCompanionService {
     final count = bytes.length ~/ 2;
     if (count < 4) return null;
     final ints = Int16List.view(bytes.buffer, bytes.offsetInBytes, count);
-    final maxAbs = ints.fold<int>(0, (prev, value) => max(prev, value.abs()));
+    final maxAbs = ints.fold<int>(0, (prev, value) => math.max(prev, value.abs()));
     if (maxAbs <= 100) return null;
 
     final trimmed = bytes.sublist(0, count * 2);
@@ -213,10 +238,15 @@ class AiCompanionService {
     header.setUint32(16, 16, Endian.little);
     header.setUint16(20, 1, Endian.little);
     header.setUint16(22, 1, Endian.little);
+    const channels = 1;
+    const bytesPerSample = 2;
+    final byteRate = sampleRate * channels * bytesPerSample;
+    final blockAlign = channels * bytesPerSample;
+
     header.setUint32(24, sampleRate, Endian.little);
-    header.setUint32(28, sampleRate * 2, Endian.little);
-    header.setUint16(32, 2, Endian.little);
-    header.setUint16(34, 16, Endian.little);
+    header.setUint32(28, byteRate, Endian.little);
+    header.setUint16(32, blockAlign, Endian.little);
+    header.setUint16(34, bytesPerSample * 8, Endian.little);
     header.setUint32(36, _fourcc('data'), Endian.little);
     header.setUint32(40, pcm.length, Endian.little);
 
