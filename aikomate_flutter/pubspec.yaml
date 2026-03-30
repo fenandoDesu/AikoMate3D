@@ -41,6 +41,7 @@ dependencies:
   flutter_secure_storage: ^9.0.0
   audioplayers: ^1.1.1
   web_socket_channel: ^2.4.0
+  file_picker: ^8.0.6
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +70,8 @@ flutter:
     - assets/web/
     - assets/web/libs/
     - assets/web/models/
+    - assets/web/rooms/
+    - assets/web/backgroud_images/
     - assets/web/models/UltimateLoverH1.vrm
     - assets/web/src/
     - assets/web/src/renderer/

@@ -13,7 +13,9 @@ import 'package:aikomate_flutter/menu_sections_pages/login.dart';
 import 'package:aikomate_flutter/menu_sections_pages/signup.dart';
 import 'package:aikomate_flutter/menu_sections_pages/profile.dart';
 import 'package:aikomate_flutter/menu_sections_pages/history.dart';
+import 'package:aikomate_flutter/menu_sections_pages/background.dart';
 import 'package:aikomate_flutter/core/api/auth_api.dart';
+import 'package:aikomate_flutter/core/storage/settings_storage.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -54,12 +56,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       });
     });
     _eventSubscription = _aiService.eventStream.listen((event) {
-      final controller = _controller;
-      if (controller == null) {
-        _pendingWebEvents.add(event);
-        return;
-      }
-      _sendWebEvent(controller, event);
+      _queueWebEvent(event);
     });
     _aiService.ensureConnected().catchError((error) {
       if (!mounted) return;
@@ -96,6 +93,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  Future<void> _loadSavedBackground() async {
+    final settings = await SettingsStorage.readAll();
+    final bg = settings["background"];
+    if (bg is Map) {
+      final config = BackgroundConfig.fromJson(
+        bg.map((k, v) => MapEntry(k.toString(), v)),
+      );
+      _applyBackground(config);
+    }
+  }
+
   void _sendWebEvent(
     InAppWebViewController controller,
     Map<String, dynamic> event,
@@ -106,6 +114,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  void _queueWebEvent(Map<String, dynamic> event) {
+    final controller = _controller;
+    if (controller == null) {
+      _pendingWebEvents.add(event);
+      return;
+    }
+    _sendWebEvent(controller, event);
+  }
+
   void _flushPendingWebEvents() {
     final controller = _controller;
     if (controller == null || _pendingWebEvents.isEmpty) return;
@@ -114,6 +131,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
     for (final event in pending) {
       _sendWebEvent(controller, event);
     }
+  }
+
+  void _applyBackground(BackgroundConfig config) {
+    _queueWebEvent({
+      "command": "setBackground",
+      "type": config.type,
+      "url": config.url,
+    });
   }
 
   Future<void> _checkSpeechSupport() async {
@@ -142,6 +167,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
         _loadVRM();
         unawaited(_checkSpeechSupport());
         _flushPendingWebEvents();
+        unawaited(_loadSavedBackground());
         break;
       case 'speechTranscript':
         _handleSpeechTranscript(data);
@@ -431,6 +457,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
           key: const ValueKey("history"),
           onBack: () {
             setState(() => _overlayView = OverlayView.menu);
+          },
+        );
+      case OverlayView.background:
+        return BackgroundView(
+          key: const ValueKey("background"),
+          onBack: () {
+            setState(() => _overlayView = OverlayView.menu);
+          },
+          onApply: (config) {
+            _applyBackground(config);
           },
         );
     }

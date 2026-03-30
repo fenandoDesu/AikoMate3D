@@ -45,7 +45,8 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100
 );
-camera.position.set(0, 1.45, 1.7);
+const defaultCameraPosition = new THREE.Vector3(0, 1.45, 1.7);
+camera.position.copy(defaultCameraPosition);
 camera.lookAt(0, 1.4, 0);
 
 // ─── Lights ──────────────────────────────────────────────────────────────────
@@ -66,6 +67,20 @@ let currentVRM = null;
 let vrmFactor = 1;
 const clock = new THREE.Clock();
 let elapsedTime = 0;
+
+function focusCameraOnAvatar() {
+  const target = new THREE.Vector3(0, 1.4, 0);
+  if (currentVRM && currentVRM.scene) {
+    currentVRM.scene.getWorldPosition(target);
+    target.y += 1.4;
+  }
+  camera.lookAt(target);
+}
+
+function resetCamera() {
+  camera.position.copy(defaultCameraPosition);
+  focusCameraOnAvatar();
+}
 
 // --- Lip sync (phonemes) ---
 let currentSpeech = null;
@@ -196,6 +211,94 @@ function stepPhonemes(nowMs) {
   if (isSpeaking) requestAnimationFrame(stepPhonemes);
 }
 
+// --- Backgrounds (normal mode only) ---
+let roomModel = null;
+let bgVideo = null;
+let bgVideoTexture = null;
+
+function clearRoom() {
+  if (!roomModel) return;
+  scene.remove(roomModel);
+  roomModel.traverse((child) => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => m.dispose && m.dispose());
+    }
+  });
+  roomModel = null;
+}
+
+function clearVideoBackground() {
+  if (bgVideo) {
+    bgVideo.pause();
+    bgVideo.src = "";
+    bgVideo.load();
+  }
+  bgVideo = null;
+  if (bgVideoTexture) bgVideoTexture.dispose();
+  bgVideoTexture = null;
+}
+
+function setBackground(config) {
+  if (isAR) return;
+  const type = config?.type || "none";
+  const url = config?.url || "";
+
+  clearRoom();
+  clearVideoBackground();
+
+  if (type === "none") {
+    scene.background = new THREE.Color(0xffffff);
+    return;
+  }
+
+  if (type === "image" && url) {
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      url,
+      (texture) => {
+        scene.background = texture;
+      },
+      undefined,
+      () => {
+        console.warn("Failed to load background image");
+      }
+    );
+    return;
+  }
+
+  if (type === "video" && url) {
+    bgVideo = document.createElement("video");
+    bgVideo.src = url;
+    bgVideo.loop = true;
+    bgVideo.muted = true;
+    bgVideo.playsInline = true;
+    bgVideo.play().catch(() => {});
+    bgVideoTexture = new THREE.VideoTexture(bgVideo);
+    scene.background = bgVideoTexture;
+    return;
+  }
+
+  if (type === "room" && url) {
+    const loader = new GLTFLoader();
+    loader.load(
+      url,
+      (gltf) => {
+        roomModel = gltf.scene;
+        roomModel.position.set(0, 0, 0);
+        roomModel.scale.set(1, 1, 1);
+        scene.add(roomModel);
+        resetCamera();
+      },
+      undefined,
+      () => {
+        console.warn("Failed to load room");
+      }
+    );
+  }
+}
+
 // ─── AR State (WebXR path — unused in overlay mode) ──────────────────────────
 let xrSession = null;
 let xrHitTestSource = null;
@@ -246,6 +349,7 @@ function loadVRM(url) {
       if (isAR) vrm.scene.visible = false;
 
       scene.add(vrm.scene);
+      resetCamera();
 
       const bones = {};
       for (const [name, bone] of Object.entries(vrm.humanoid.rawHumanBones)) {
@@ -277,6 +381,10 @@ window.onFlutterMessage = (jsonString) => {
 
   if (data.command === 'loadVRM') {
     loadVRM(data.url);
+  }
+
+  if (data.command === 'setBackground') {
+    setBackground({ type: data.type, url: data.url });
   }
 
   // ARCore overlay: Flutter tells us where to place the model
