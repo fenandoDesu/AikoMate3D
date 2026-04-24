@@ -20,6 +20,9 @@ class AiCompanionService {
 
   final ValueNotifier<AiCompanionConnectionState> connectionState =
       ValueNotifier(AiCompanionConnectionState.idle);
+
+  /// Server-driven intimacy (0–5), default 2 until `intimacy_update` arrives.
+  final ValueNotifier<int> intimacy = ValueNotifier(2);
   final StreamController<String> _logController = StreamController.broadcast();
   final StreamController<Map<String, dynamic>> _eventController =
       StreamController.broadcast();
@@ -85,7 +88,6 @@ class AiCompanionService {
       throw StateError("WebSocket not available");
     }
     final fishAudioId = "a2fcdd688eed4521baf39ffc05ca7d3f";
-    final intimacyLevel = 4;
 
     final payload = jsonEncode({
       "text": text,
@@ -93,7 +95,7 @@ class AiCompanionService {
       "avatar_name": avatarName,
       "user_name": userName,
       "fish_audio_id": fishAudioId,
-      "intimacy": intimacyLevel,
+      "intimacy": intimacy.value.clamp(0, 5),
     });
 
     Future<void> attemptSend() async {
@@ -193,6 +195,15 @@ class AiCompanionService {
         _streamEnded = true;
         _flushPendingAudio();
         _maybeEndSpeech();
+        break;
+      case "intimacy_update":
+        final raw = message["intimacy"];
+        if (raw is num) {
+          final next = raw.round().clamp(0, 5);
+          if (intimacy.value != next) {
+            intimacy.value = next;
+          }
+        }
         break;
       case "error":
         _logController.add("Server error: ${message["message"]}");
@@ -411,6 +422,7 @@ class AiCompanionService {
     await _logController.close();
     await _eventController.close();
     connectionState.dispose();
+    intimacy.dispose();
     await _channel?.sink.close();
     _channel = null;
   }

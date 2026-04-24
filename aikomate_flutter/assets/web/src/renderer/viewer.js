@@ -43,7 +43,7 @@ if (!isAR) scene.background = new THREE.Color(0xffffff);
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(
-  28,
+  38,
   window.innerWidth / window.innerHeight,
   0.1,
   100

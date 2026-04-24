@@ -18,6 +18,7 @@ import 'package:aikomate_flutter/menu_sections_pages/background.dart';
 import 'package:aikomate_flutter/core/api/auth_api.dart';
 import 'package:aikomate_flutter/core/storage/settings_storage.dart';
 import 'package:aikomate_flutter/features/viewer/user_background_loopback.dart';
+import 'package:aikomate_flutter/features/viewer/widgets/intimacy_thermometer.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -511,9 +512,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
     }
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          InAppWebView(
+          Positioned.fill(
+            child: InAppWebView(
             initialUrlRequest: URLRequest(
               url: WebUri(
                 'http://localhost:$_serverPort/assets/web/index.html?mode=normal',
@@ -523,6 +526,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
               javaScriptEnabled: true,
               mediaPlaybackRequiresUserGesture: false,
               allowsInlineMediaPlayback: true,
+              disableVerticalScroll: true,
+              disableHorizontalScroll: true,
+              disallowOverScroll: true,
+              alwaysBounceVertical: false,
+              alwaysBounceHorizontal: false,
+              supportZoom: false,
+              builtInZoomControls: false,
+              displayZoomControls: false,
+              overScrollMode: OverScrollMode.NEVER,
+              verticalScrollBarEnabled: false,
+              horizontalScrollBarEnabled: false,
             ),
             onWebViewCreated: (controller) {
               _controller = controller;
@@ -563,39 +577,53 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 action: PermissionResponseAction.GRANT,
               );
             },
+            ),
           ),
 
-          // options button top left
           Positioned(
             top: MediaQuery.of(context).padding.top + 12,
             left: 16,
-            child: GlassIconButton(
-              adaptiveIconSize: true,
-              padding: EdgeInsets.all(8),
-              size: 55,
-              radius: 15,
-              style: GlassPresets.button,
-              icon: Icons.menu,
-              onPressed: () {
-                setState(() {
-                  _showOptions = true;
-                  _overlayView = OverlayView.menu; // reset to menu
-                });
-              },
-            ),
-          ),
-          // AR button top right
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 12,
             right: 16,
-            child: GlassIconButton(
-              adaptiveIconSize: true,
-              padding: EdgeInsets.all(8),
-              size: 55,
-              radius: 15,
-              style: GlassPresets.button,
-              icon: Icons.view_in_ar,
-              onPressed: _openAR,
+            child: SizedBox(
+              height: 55,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GlassIconButton(
+                    adaptiveIconSize: true,
+                    padding: const EdgeInsets.all(8),
+                    size: 55,
+                    radius: 15,
+                    style: GlassPresets.button,
+                    icon: Icons.menu,
+                    onPressed: () {
+                      setState(() {
+                        _showOptions = true;
+                        _overlayView = OverlayView.menu;
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _aiService.intimacy,
+                      builder: (context, intimacy, _) {
+                        return IntimacyThermometer(value: intimacy);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GlassIconButton(
+                    adaptiveIconSize: true,
+                    padding: const EdgeInsets.all(8),
+                    size: 55,
+                    radius: 15,
+                    style: GlassPresets.button,
+                    icon: Icons.view_in_ar,
+                    onPressed: _openAR,
+                  ),
+                ],
+              ),
             ),
           ),
           Positioned(
