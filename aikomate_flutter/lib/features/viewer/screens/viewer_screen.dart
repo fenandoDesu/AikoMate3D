@@ -17,6 +17,7 @@ import 'package:aikomate_flutter/menu_sections_pages/history.dart';
 import 'package:aikomate_flutter/menu_sections_pages/background.dart';
 import 'package:aikomate_flutter/core/api/auth_api.dart';
 import 'package:aikomate_flutter/core/storage/settings_storage.dart';
+import 'package:aikomate_flutter/features/viewer/user_background_loopback.dart';
 
 class ViewerScreen extends StatefulWidget {
   const ViewerScreen({super.key});
@@ -45,6 +46,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
   String _speechLanguage = 'en-US';
   String _statusLabel = '';
   final List<Map<String, dynamic>> _pendingWebEvents = [];
+
+  final UserBackgroundLoopback _userBackgroundLoopback =
+      UserBackgroundLoopback();
 
   @override
   void initState() {
@@ -82,16 +86,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
     unawaited(_aiService.dispose());
     _messageController.dispose();
     _localhostServer?.close();
+    _userBackgroundLoopback.dispose();
     super.dispose();
   }
 
   void _loadVRM() {
     const vrmUrl =
         'http://localhost:8080/assets/web/models/UltimateLoverH1.vrm';
-    final message = jsonEncode({'command': 'loadVRM', 'url': vrmUrl});
-    _controller?.evaluateJavascript(
-      source: "window.onFlutterMessage('$message')",
-    );
+    _queueWebEvent({'command': 'loadVRM', 'url': vrmUrl});
   }
 
   Future<void> _loadSavedBackground() async {
@@ -101,7 +103,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       final config = BackgroundConfig.fromJson(
         bg.map((k, v) => MapEntry(k.toString(), v)),
       );
-      _applyBackground(config);
+      await _applyBackground(config);
     }
   }
 
@@ -110,8 +112,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     Map<String, dynamic> event,
   ) {
     final payload = jsonEncode(event);
+    final jsStringArg = jsonEncode(payload);
     controller.evaluateJavascript(
-      source: "window.onFlutterMessage('$payload')",
+      source: 'window.onFlutterMessage($jsStringArg)',
     );
   }
 
@@ -134,11 +137,36 @@ class _ViewerScreenState extends State<ViewerScreen> {
     }
   }
 
-  void _applyBackground(BackgroundConfig config) {
+  Future<String> _resolveBackgroundWebUrl(BackgroundConfig config) async {
+    final trimmed = config.url.trim();
+    if (trimmed.isEmpty) return "";
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    final deviceHttp = await _userBackgroundLoopback.toHttpUrlIfDeviceFile(
+      trimmed,
+    );
+    if (deviceHttp != null) {
+      return deviceHttp;
+    }
+    if (trimmed.startsWith('assets/web/')) {
+      return 'http://localhost:$_serverPort/$trimmed';
+    }
+    if (!trimmed.startsWith('/') && !trimmed.contains('://')) {
+      return 'http://localhost:$_serverPort/assets/web/$trimmed';
+    }
+    return trimmed;
+  }
+
+  Future<void> _applyBackground(BackgroundConfig config) async {
+    final url = await _resolveBackgroundWebUrl(config);
     _queueWebEvent({
       "command": "setBackground",
       "type": config.type,
-      "url": config.url,
+      "url": url,
+      "focusX": config.imageFocusX,
+      "focusY": config.imageFocusY,
+      "zoom": config.imageZoom,
     });
   }
 
@@ -470,7 +498,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
             setState(() => _overlayView = OverlayView.menu);
           },
           onApply: (config) {
-            _applyBackground(config);
+            unawaited(_applyBackground(config));
           },
         );
     }

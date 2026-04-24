@@ -1,30 +1,49 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 import 'package:aikomate_flutter/core/storage/settings_storage.dart';
+import 'package:aikomate_flutter/menu_sections_pages/background_framing_editor.dart';
 
 class BackgroundConfig {
   final String type; // image | video | room | none
   final String url;
+  /// 0–1: horizontal center of visible region (image / video backgrounds).
+  final double imageFocusX;
+  /// 0–1: vertical center of visible region.
+  final double imageFocusY;
+  /// 1 = fit; larger = zoom in (see more detail, smaller area).
+  final double imageZoom;
 
   const BackgroundConfig({
     required this.type,
     required this.url,
+    this.imageFocusX = 0.5,
+    this.imageFocusY = 0.5,
+    this.imageZoom = 1.0,
   });
 
   Map<String, dynamic> toJson() => {
         "type": type,
         "url": url,
+        "focusX": imageFocusX,
+        "focusY": imageFocusY,
+        "zoom": imageZoom,
       };
 
   static BackgroundConfig fromJson(Map<String, dynamic> data) {
     return BackgroundConfig(
       type: data["type"]?.toString() ?? "none",
       url: data["url"]?.toString() ?? "",
+      imageFocusX: (data["focusX"] as num?)?.toDouble() ?? 0.5,
+      imageFocusY: (data["focusY"] as num?)?.toDouble() ?? 0.5,
+      imageZoom: (data["zoom"] as num?)?.toDouble() ?? 1.0,
     );
   }
 }
@@ -46,7 +65,8 @@ class BackgroundItem {
     this.thumbnail,
   });
 
-  BackgroundConfig toConfig() => BackgroundConfig(type: type, url: url);
+  BackgroundConfig toConfig() =>
+      BackgroundConfig(type: type, url: url);
 
   Map<String, dynamic> toJson() => {
         "id": id,
@@ -73,6 +93,9 @@ class BackgroundCard extends StatelessWidget {
   final BackgroundItem item;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final bool deleteSelectionMode;
+  final bool markedForDeletion;
   final String subtitle;
   final IconData fallbackIcon;
 
@@ -83,12 +106,16 @@ class BackgroundCard extends StatelessWidget {
     required this.onTap,
     required this.subtitle,
     required this.fallbackIcon,
+    this.onLongPress,
+    this.deleteSelectionMode = false,
+    this.markedForDeletion = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: SizedBox(
         width: 150,
         child: Stack(
@@ -144,6 +171,20 @@ class BackgroundCard extends StatelessWidget {
                 ],
               ),
             ),
+            if (deleteSelectionMode && item.source == 'user')
+              Positioned(
+                left: 8,
+                top: 8,
+                child: Icon(
+                  markedForDeletion
+                      ? Icons.check_circle
+                      : Icons.circle_outlined,
+                  color: markedForDeletion
+                      ? Colors.orangeAccent
+                      : Colors.white54,
+                  size: 22,
+                ),
+              ),
             if (selected)
               Positioned(
                 right: 8,
@@ -238,19 +279,13 @@ class BackgroundView extends StatefulWidget {
 
 class _BackgroundViewState extends State<BackgroundView> {
   static const _storageKey = "backgrounds";
+  static const _framesKey = "backgroundImageFrames";
   static final List<BackgroundItem> _baseBackgrounds = [
     BackgroundItem(
       id: "builtin_none",
       type: "none",
       url: "",
       label: "None",
-      source: "app",
-    ),
-    BackgroundItem(
-      id: "builtin_world",
-      type: "room",
-      url: "rooms/world.glb",
-      label: "Starter Room",
       source: "app",
     ),
   ];
@@ -265,7 +300,16 @@ class _BackgroundViewState extends State<BackgroundView> {
   String? _error;
   String? _formError;
   String? _pickedPath;
-  String? _pickedThumbnail;
+  PlatformFile? _pickedMainFile;
+  bool _userDeleteMode = false;
+  final Set<String> _userIdsMarkedForDeletion = {};
+
+  /// Per-image URL → framing (persists across sessions).
+  Map<String, Map<String, double>> _imageFrames = {};
+
+  double _frameFocusX = 0.5;
+  double _frameFocusY = 0.5;
+  double _frameZoom = 1.0;
 
   @override
   void initState() {
@@ -277,33 +321,194 @@ class _BackgroundViewState extends State<BackgroundView> {
     final data = await SettingsStorage.readAll();
     _appItems = await _loadAppBackgrounds();
     _userItems = _readBackgroundList(data[_storageKey]);
+    _imageFrames = _readImageFrames(data[_framesKey]);
     final config = _readCurrentBackground(data["background"]);
     _selectedId = _findMatchingId(config);
+    _syncFrameControlsFromSelection(config);
     setState(() => _loading = false);
+  }
+
+  Map<String, Map<String, double>> _readImageFrames(dynamic value) {
+    if (value is! Map) return {};
+    final out = <String, Map<String, double>>{};
+    for (final e in value.entries) {
+      final url = e.key.toString();
+      final raw = e.value;
+      if (raw is! Map) continue;
+      final m = raw.map((k, v) => MapEntry(k.toString(), v));
+      out[url] = {
+        'focusX': (m['focusX'] as num?)?.toDouble() ?? 0.5,
+        'focusY': (m['focusY'] as num?)?.toDouble() ?? 0.5,
+        'zoom': (m['zoom'] as num?)?.toDouble() ?? 1.0,
+      };
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _imageFramesToJson() {
+    return _imageFrames.map(
+      (k, v) => MapEntry(
+        k,
+        {
+          'focusX': v['focusX'] ?? 0.5,
+          'focusY': v['focusY'] ?? 0.5,
+          'zoom': v['zoom'] ?? 1.0,
+        },
+      ),
+    );
+  }
+
+  BackgroundItem? _getSelectedItem() {
+    for (final i in _appItems) {
+      if (i.id == _selectedId) return i;
+    }
+    for (final i in _userItems) {
+      if (i.id == _selectedId) return i;
+    }
+    return null;
+  }
+
+  void _syncFrameControlsFromSelection(BackgroundConfig? saved) {
+    final item = _getSelectedItem();
+    if (item != null &&
+        (item.type == 'image' || item.type == 'video')) {
+      final f = _imageFrames[item.url];
+      _frameFocusX = (f?['focusX'] ?? 0.5).clamp(0.0, 1.0);
+      _frameFocusY = (f?['focusY'] ?? 0.5).clamp(0.0, 1.0);
+      _frameZoom = (f?['zoom'] ?? 1.0).clamp(1.0, 3.0);
+      return;
+    }
+    if (saved != null &&
+        (saved.type == 'image' || saved.type == 'video') &&
+        saved.url.isNotEmpty) {
+      _frameFocusX = saved.imageFocusX.clamp(0.0, 1.0);
+      _frameFocusY = saved.imageFocusY.clamp(0.0, 1.0);
+      _frameZoom = saved.imageZoom.clamp(1.0, 3.0);
+      return;
+    }
+    _frameFocusX = 0.5;
+    _frameFocusY = 0.5;
+    _frameZoom = 1.0;
+  }
+
+  BackgroundConfig _configForItem(BackgroundItem item) {
+    if (item.type == 'image' || item.type == 'video') {
+      final isSelected = item.id == _selectedId;
+      if (isSelected) {
+        return BackgroundConfig(
+          type: item.type,
+          url: item.url,
+          imageFocusX: _frameFocusX.clamp(0.0, 1.0),
+          imageFocusY: _frameFocusY.clamp(0.0, 1.0),
+          imageZoom: _frameZoom.clamp(1.0, 3.0),
+        );
+      }
+      final f = _imageFrames[item.url];
+      return BackgroundConfig(
+        type: item.type,
+        url: item.url,
+        imageFocusX: (f?['focusX'] ?? 0.5).clamp(0.0, 1.0),
+        imageFocusY: (f?['focusY'] ?? 0.5).clamp(0.0, 1.0),
+        imageZoom: (f?['zoom'] ?? 1.0).clamp(1.0, 3.0),
+      );
+    }
+    return BackgroundConfig(type: item.type, url: item.url);
+  }
+
+  void _applyFramingPreview() {
+    final item = _getSelectedItem();
+    if (item == null || (item.type != 'image' && item.type != 'video')) {
+      return;
+    }
+    widget.onApply(_configForItem(item));
+  }
+
+  Future<void> _commitFramingFromEditor(
+    double fx,
+    double fy,
+    double zoom,
+  ) async {
+    final item = _getSelectedItem();
+    if (item == null || (item.type != 'image' && item.type != 'video')) {
+      return;
+    }
+    setState(() {
+      _frameFocusX = fx.clamp(0.0, 1.0);
+      _frameFocusY = fy.clamp(0.0, 1.0);
+      _frameZoom = zoom.clamp(1.0, 3.0);
+    });
+    _imageFrames[item.url] = {
+      'focusX': _frameFocusX,
+      'focusY': _frameFocusY,
+      'zoom': _frameZoom,
+    };
+    await SettingsStorage.update({
+      _framesKey: _imageFramesToJson(),
+      "background": _configForItem(item).toJson(),
+    });
+    _applyFramingPreview();
   }
 
   Future<List<BackgroundItem>> _loadAppBackgrounds() async {
     final results = <BackgroundItem>[..._baseBackgrounds];
     try {
-      final raw = await rootBundle.loadString('AssetManifest.json');
-      final manifest = Map<String, dynamic>.from(
-        jsonDecode(raw) as Map,
-      );
-      const prefix = 'assets/web/backgroud_images/';
-      for (final entry in manifest.keys) {
-        if (!entry.startsWith(prefix)) continue;
-        if (!_isImageAsset(entry)) continue;
-        final name = entry.split('/').last;
-        results.add(
-          BackgroundItem(
-            id: 'builtin_img_$name',
-            type: 'image',
-            url: entry.replaceFirst('assets/web/', ''),
-            label: _titleFromFilename(name),
-            thumbnail: entry,
-            source: 'app',
-          ),
-        );
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final keys = manifest.listAssets();
+      const imagePrefixes = [
+        'assets/web/backgroud_images/',
+        'assets/web/background_images/',
+      ];
+      const roomsPrefix = 'assets/web/rooms/';
+
+      for (final entry in keys) {
+        if (entry == 'assets/web/rooms/.gitkeep') continue;
+
+        var matched = false;
+        for (final prefix in imagePrefixes) {
+          if (entry.startsWith(prefix) && _isImageAsset(entry)) {
+            final name = entry.split('/').last;
+            results.add(
+              BackgroundItem(
+                id: entry,
+                type: 'image',
+                url: entry.replaceFirst('assets/web/', ''),
+                label: _titleFromFilename(name),
+                thumbnail: entry,
+                source: 'app',
+              ),
+            );
+            matched = true;
+            break;
+          }
+        }
+        if (matched) continue;
+
+        if (entry.startsWith(roomsPrefix)) {
+          final lower = entry.toLowerCase();
+          if (_isRoomAsset(lower)) {
+            final name = entry.split('/').last;
+            results.add(
+              BackgroundItem(
+                id: entry,
+                type: 'room',
+                url: entry.replaceFirst('assets/web/', ''),
+                label: _titleFromFilename(name),
+                source: 'app',
+              ),
+            );
+          } else if (_isVideoAsset(lower)) {
+            final name = entry.split('/').last;
+            results.add(
+              BackgroundItem(
+                id: entry,
+                type: 'video',
+                url: entry.replaceFirst('assets/web/', ''),
+                label: _titleFromFilename(name),
+                source: 'app',
+              ),
+            );
+          }
+        }
       }
     } catch (_) {
       // ignore asset scan errors
@@ -317,6 +522,17 @@ class _BackgroundViewState extends State<BackgroundView> {
         lower.endsWith('.jpg') ||
         lower.endsWith('.jpeg') ||
         lower.endsWith('.webp');
+  }
+
+  bool _isRoomAsset(String lowerPath) {
+    return lowerPath.endsWith('.glb') || lowerPath.endsWith('.gltf');
+  }
+
+  bool _isVideoAsset(String lowerPath) {
+    return lowerPath.endsWith('.mp4') ||
+        lowerPath.endsWith('.webm') ||
+        lowerPath.endsWith('.mov') ||
+        lowerPath.endsWith('.m4v');
   }
 
   String _titleFromFilename(String name) {
@@ -366,8 +582,194 @@ class _BackgroundViewState extends State<BackgroundView> {
 
   List<BackgroundItem> _allItems() => [..._appItems, ..._userItems];
 
+  String _inferMediaExtension(PlatformFile file, String type) {
+    final n = file.name;
+    final dot = n.lastIndexOf('.');
+    if (dot >= 0 && dot < n.length - 1) {
+      return n.substring(dot).toLowerCase();
+    }
+    switch (type) {
+      case 'video':
+        return '.mp4';
+      case 'room':
+        return '.glb';
+      default:
+        return '.bin';
+    }
+  }
+
+  Future<String?> _persistUserPickedMedia(
+    PlatformFile file,
+    String type,
+  ) async {
+    try {
+      final support = await getApplicationSupportDirectory();
+      final dir = Directory('${support.path}/user_backgrounds');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final ext = _inferMediaExtension(file, type);
+      final out = File(
+        '${dir.path}/bg_${DateTime.now().millisecondsSinceEpoch}$ext',
+      );
+      if (file.bytes != null) {
+        await out.writeAsBytes(file.bytes!, flush: true);
+      } else if (file.path != null && file.path!.isNotEmpty) {
+        final src = File(file.path!);
+        if (await src.exists()) {
+          await src.copy(out.path);
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      return Uri.file(out.path, windows: Platform.isWindows).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// First-frame (near) JPEG thumbnail for video cards and framing UI.
+  Future<String?> _thumbnailFileForVideo(String persistedVideoUri) async {
+    try {
+      final videoPath = Uri.parse(persistedVideoUri).toFilePath();
+      if (!await File(videoPath).exists()) return null;
+      final support = await getApplicationSupportDirectory();
+      final dir = Directory('${support.path}/user_backgrounds/thumbs');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final out = await VideoThumbnail.thumbnailFile(
+        video: videoPath,
+        thumbnailPath: dir.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 720,
+        quality: 88,
+        timeMs: 400,
+      );
+      if (out == null || out.isEmpty) return null;
+      return Uri.file(out, windows: Platform.isWindows).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _deleteLocalFileIfAny(String? ref) async {
+    if (ref == null || ref.isEmpty) return;
+    if (!ref.startsWith('file://')) return;
+    try {
+      final path = Uri.parse(ref).toFilePath();
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  void _cancelUserDeleteMode() {
+    setState(() {
+      _userDeleteMode = false;
+      _userIdsMarkedForDeletion.clear();
+    });
+  }
+
+  void _onBackgroundCardTap(BackgroundItem item) {
+    if (item.source == 'user' && _userDeleteMode) {
+      setState(() {
+        if (_userIdsMarkedForDeletion.contains(item.id)) {
+          _userIdsMarkedForDeletion.remove(item.id);
+          if (_userIdsMarkedForDeletion.isEmpty) {
+            _userDeleteMode = false;
+          }
+        } else {
+          _userIdsMarkedForDeletion.add(item.id);
+        }
+      });
+      return;
+    }
+    if (_userDeleteMode) {
+      setState(() {
+        _userDeleteMode = false;
+        _userIdsMarkedForDeletion.clear();
+      });
+    }
+    _applyItem(item);
+  }
+
+  void _onUserCardLongPress(BackgroundItem item) {
+    if (item.source != 'user') return;
+    setState(() {
+      if (!_userDeleteMode) {
+        _userDeleteMode = true;
+        _userIdsMarkedForDeletion.add(item.id);
+      } else {
+        if (_userIdsMarkedForDeletion.contains(item.id)) {
+          _userIdsMarkedForDeletion.remove(item.id);
+        } else {
+          _userIdsMarkedForDeletion.add(item.id);
+        }
+        if (_userIdsMarkedForDeletion.isEmpty) {
+          _userDeleteMode = false;
+        }
+      }
+    });
+  }
+
+  Future<void> _deleteMarkedUserBackgrounds() async {
+    if (_userIdsMarkedForDeletion.isEmpty) return;
+
+    final data = await SettingsStorage.readAll();
+    final current = _readCurrentBackground(data['background']);
+    final toRemove = _userItems
+        .where((e) => _userIdsMarkedForDeletion.contains(e.id))
+        .toList();
+
+    for (final item in toRemove) {
+      _imageFrames.remove(item.url);
+      await _deleteLocalFileIfAny(item.url);
+      await _deleteLocalFileIfAny(item.thumbnail);
+    }
+
+    final shouldClearBackground = current != null &&
+        toRemove.any(
+          (e) => e.type == current.type && e.url == current.url,
+        );
+
+    final remaining = _userItems
+        .where((e) => !_userIdsMarkedForDeletion.contains(e.id))
+        .toList();
+
+    final patch = <String, dynamic>{
+      _storageKey: remaining.map((e) => e.toJson()).toList(),
+      _framesKey: _imageFramesToJson(),
+    };
+
+    if (shouldClearBackground) {
+      patch['background'] =
+          const BackgroundConfig(type: 'none', url: '').toJson();
+    }
+
+    await SettingsStorage.update(patch);
+
+    setState(() {
+      _userItems = remaining;
+      _userDeleteMode = false;
+      _userIdsMarkedForDeletion.clear();
+      if (shouldClearBackground) {
+        _selectedId = 'builtin_none';
+      } else {
+        _selectedId = _findMatchingId(current);
+      }
+    });
+
+    if (shouldClearBackground) {
+      widget.onApply(const BackgroundConfig(type: 'none', url: ''));
+    }
+  }
+
   Future<void> _applyItem(BackgroundItem item) async {
-    final config = item.toConfig();
+    final f = _imageFrames[item.url];
+    if (item.type == 'image' || item.type == 'video') {
+      _frameFocusX = (f?['focusX'] ?? 0.5).clamp(0.0, 1.0);
+      _frameFocusY = (f?['focusY'] ?? 0.5).clamp(0.0, 1.0);
+      _frameZoom = (f?['zoom'] ?? 1.0).clamp(1.0, 3.0);
+    }
+    final config = _configForItem(item);
     await SettingsStorage.update({
       "background": config.toJson(),
     });
@@ -388,13 +790,49 @@ class _BackgroundViewState extends State<BackgroundView> {
       return;
     }
 
-    final path = _normalizePickedPath(picked);
+    PlatformFile? mainFile = _pickedMainFile;
+    if (mainFile == null && picked != null && picked.isNotEmpty) {
+      mainFile = PlatformFile(
+        name: picked.split(RegExp(r'[/\\]')).last,
+        path: picked.startsWith('file://') ? Uri.parse(picked).toFilePath() : picked,
+        size: 0,
+      );
+    }
+
+    if (mainFile == null) {
+      setState(() => _formError = "Pick a file first.");
+      return;
+    }
+
+    final persistedUrl = await _persistUserPickedMedia(mainFile, _newType);
+    if (persistedUrl == null || persistedUrl.isEmpty) {
+      setState(
+        () => _formError = "Could not save that file. Try picking it again.",
+      );
+      return;
+    }
+
+    String? thumbRef;
+    if (_newType == "image") {
+      thumbRef = persistedUrl;
+    } else if (_newType == "video") {
+      thumbRef = await _thumbnailFileForVideo(persistedUrl);
+      if (thumbRef == null) {
+        await _deleteLocalFileIfAny(persistedUrl);
+        setState(
+          () => _formError =
+              "Could not create a preview image for this video. Try another file or format.",
+        );
+        return;
+      }
+    }
+
     final item = BackgroundItem(
       id: "user_${DateTime.now().millisecondsSinceEpoch}",
       type: _newType,
-      url: path ?? "",
+      url: persistedUrl,
       label: label,
-      thumbnail: _pickedThumbnail,
+      thumbnail: thumbRef,
       source: "user",
     );
 
@@ -410,16 +848,8 @@ class _BackgroundViewState extends State<BackgroundView> {
       _labelController.clear();
       _newType = "image";
       _pickedPath = null;
-      _pickedThumbnail = null;
+      _pickedMainFile = null;
     });
-  }
-
-  String? _normalizePickedPath(String? path) {
-    if (path == null || path.isEmpty) return null;
-    if (path.startsWith('file://') || path.startsWith('content://')) {
-      return path;
-    }
-    return 'file://$path';
   }
 
   Future<void> _pickFileForType() async {
@@ -437,46 +867,34 @@ class _BackgroundViewState extends State<BackgroundView> {
     final result = await FilePicker.platform.pickFiles(
       type: type,
       allowedExtensions: extensions,
+      withData: true,
     );
 
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
-    if (file.path == null) {
-      setState(() => _formError = "Could not access that file path.");
+    if (file.path == null && file.bytes == null) {
+      setState(() => _formError = "Could not read that file.");
       return;
     }
     setState(() {
-      _pickedPath = file.path;
+      _pickedMainFile = file;
+      _pickedPath = file.path ?? file.name;
       _formError = null;
-      if (_newType == "image") {
-        _pickedThumbnail = _normalizePickedPath(file.path);
-      }
       if (_labelController.text.trim().isEmpty) {
         _labelController.text = _titleFromFilename(file.name);
       }
     });
   }
 
-  Future<void> _pickThumbnail() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.path == null) {
-      setState(() => _formError = "Could not access that thumbnail path.");
-      return;
-    }
-    setState(() {
-      _pickedThumbnail = _normalizePickedPath(file.path);
-      _formError = null;
-    });
-  }
-
   Widget _buildTypeChip(String label, String type, IconData icon) {
     final selected = _newType == type;
     return GestureDetector(
-      onTap: () => setState(() => _newType = type),
+      onTap: () => setState(() {
+        _newType = type;
+        _pickedPath = null;
+        _pickedMainFile = null;
+        _formError = null;
+      }),
       child: GlassContainer(
         style: selected ? GlassPresets.card : GlassPresets.panel,
         radius: 14,
@@ -512,7 +930,11 @@ class _BackgroundViewState extends State<BackgroundView> {
 
   Widget _buildAddCard() {
     return GestureDetector(
-      onTap: () => setState(() => _showAddForm = !_showAddForm),
+      onTap: () => setState(() {
+        _userDeleteMode = false;
+        _userIdsMarkedForDeletion.clear();
+        _showAddForm = !_showAddForm;
+      }),
       child: GlassContainer(
         style: GlassPresets.card,
         radius: 16,
@@ -569,6 +991,63 @@ class _BackgroundViewState extends State<BackgroundView> {
       default:
         return Icons.block;
     }
+  }
+
+  Widget _buildImageVideoFramingPanel() {
+    final item = _getSelectedItem();
+    if (item == null || (item.type != 'image' && item.type != 'video')) {
+      return const SizedBox.shrink();
+    }
+    final canEdit = backgroundFramingImageProvider(
+          type: item.type,
+          url: item.url,
+          thumbnail: item.thumbnail,
+        ) !=
+        null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 18),
+        _buildSectionTitle("Framing"),
+        const Text(
+          "Open the editor: drag to pan, pinch to zoom. The frame shows what appears behind the avatar.",
+          style: TextStyle(color: Colors.white38, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: !canEdit
+                ? null
+                : () {
+                    final mq = MediaQuery.of(context);
+                    final aspect = mq.size.width / math.max(mq.size.height, 1.0);
+                    openBackgroundFramingEditor(
+                      context: context,
+                      type: item.type,
+                      url: item.url,
+                      thumbnail: item.thumbnail,
+                      viewAspect: aspect,
+                      initialFocusX: _frameFocusX,
+                      initialFocusY: _frameFocusY,
+                      initialZoom: _frameZoom,
+                      onApply: (fx, fy, z) {
+                        unawaited(_commitFramingFromEditor(fx, fy, z));
+                      },
+                    );
+                  },
+            icon: const Icon(Icons.crop_free, color: Colors.lightBlueAccent, size: 20),
+            label: Text(
+              canEdit ? "Adjust with touch" : "Adjust (add image / re-save video)",
+              style: TextStyle(
+                color: canEdit ? Colors.lightBlueAccent : Colors.white38,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -642,7 +1121,7 @@ class _BackgroundViewState extends State<BackgroundView> {
                             BackgroundCard(
                               item: item,
                               selected: _selectedId == item.id,
-                              onTap: () => _applyItem(item),
+                              onTap: () => _onBackgroundCardTap(item),
                               subtitle: _typeLabel(item.type),
                               fallbackIcon: _typeIcon(item.type),
                             ),
@@ -650,6 +1129,43 @@ class _BackgroundViewState extends State<BackgroundView> {
                       ),
                     const SizedBox(height: 18),
                     _buildSectionTitle("Your backgrounds"),
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        "Long-press your card to select and delete.",
+                        style: TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                    ),
+                    if (_userDeleteMode) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          children: [
+                            TextButton(
+                              onPressed: _cancelUserDeleteMode,
+                              child: const Text(
+                                "Cancel",
+                                style: TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: _userIdsMarkedForDeletion.isEmpty
+                                  ? null
+                                  : () => _deleteMarkedUserBackgrounds(),
+                              child: Text(
+                                "Delete (${_userIdsMarkedForDeletion.length})",
+                                style: TextStyle(
+                                  color: _userIdsMarkedForDeletion.isEmpty
+                                      ? Colors.white24
+                                      : Colors.redAccent,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     Wrap(
                       spacing: 12,
                       runSpacing: 12,
@@ -658,13 +1174,18 @@ class _BackgroundViewState extends State<BackgroundView> {
                           BackgroundCard(
                             item: item,
                             selected: _selectedId == item.id,
-                            onTap: () => _applyItem(item),
+                            onTap: () => _onBackgroundCardTap(item),
+                            onLongPress: () => _onUserCardLongPress(item),
+                            deleteSelectionMode: _userDeleteMode,
+                            markedForDeletion: _userIdsMarkedForDeletion
+                                .contains(item.id),
                             subtitle: _typeLabel(item.type),
                             fallbackIcon: _typeIcon(item.type),
                           ),
                         _buildAddCard(),
                       ],
                     ),
+                    _buildImageVideoFramingPanel(),
                     if (_showAddForm) ...[
                       const SizedBox(height: 16),
                       GlassContainer(
@@ -734,34 +1255,14 @@ class _BackgroundViewState extends State<BackgroundView> {
                               ),
                             ),
                             const SizedBox(height: 10),
-                            if (_newType != "image")
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      _pickedThumbnail == null
-                                          ? "No thumbnail selected"
-                                          : _pickedThumbnail!,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  GlassIconButton(
-                                    adaptiveIconSize: true,
-                                    size: 34,
-                                    radius: 10,
-                                    style: GlassPresets.button,
-                                    icon: Icons.image_outlined,
-                                    onPressed: _pickThumbnail,
-                                  ),
-                                ],
+                            if (_newType == "video")
+                              const Padding(
+                                padding: EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  "A preview image is created automatically from your video.",
+                                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                                ),
                               ),
-                            if (_newType != "image") const SizedBox(height: 10),
                             Text(
                               _newType == "room"
                                   ? "Use a .glb or .gltf room file."

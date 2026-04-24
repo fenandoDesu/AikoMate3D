@@ -20,6 +20,9 @@ const renderer = new THREE.WebGLRenderer({
 
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setPixelRatio(window.devicePixelRatio);
+if ("outputColorSpace" in renderer) {
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+}
 renderer.xr.enabled = isAR && !isOverlay; // WebXR only if NOT overlay mode
 
 if (!isAR) {
@@ -60,6 +63,7 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  refreshRasterBackgroundCover();
 });
 
 // ─── VRM State ───────────────────────────────────────────────────────────────
@@ -240,13 +244,87 @@ function clearVideoBackground() {
   bgVideoTexture = null;
 }
 
+/** Active image/video background for aspect-cover + pan/zoom (not 3D room). */
+let rasterBackgroundState = null;
+
+function applyRasterCoverToTexture(texture, viewAspect, focusX, focusY, zoom) {
+  const img = texture.image;
+  if (!img) return;
+  const iw = img.naturalWidth || img.width || img.videoWidth || 0;
+  const ih = img.naturalHeight || img.height || img.videoHeight || 0;
+  if (!iw || !ih) return;
+
+  const ia = iw / ih;
+  const z = Math.max(0.5, Math.min(Number(zoom) || 1, 4));
+  const fx = Math.max(0, Math.min(Number(focusX) ?? 0.5, 1));
+  const fy = Math.max(0, Math.min(Number(focusY) ?? 0.5, 1));
+
+  let repeatX = 1;
+  let repeatY = 1;
+  if (ia > viewAspect) {
+    repeatX = (viewAspect / ia) / z;
+    repeatY = 1 / z;
+  } else {
+    repeatX = 1 / z;
+    repeatY = (ia / viewAspect) / z;
+  }
+
+  const offsetX = fx * (1 - repeatX);
+  const offsetY = fy * (1 - repeatY);
+
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(repeatX, repeatY);
+  texture.offset.set(offsetX, offsetY);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  texture.generateMipmaps = true;
+  // scene.background expects the same vertical convention for TextureLoader and VideoTexture;
+  // VideoTexture defaults to flipY false, which appears upside-down as the env background.
+  texture.flipY = true;
+  texture.needsUpdate = true;
+}
+
+function refreshRasterBackgroundCover() {
+  if (!rasterBackgroundState) return;
+  const { texture, focusX, focusY, zoom } = rasterBackgroundState;
+  if (!texture || !texture.image) return;
+  applyRasterCoverToTexture(
+    texture,
+    window.innerWidth / window.innerHeight,
+    focusX,
+    focusY,
+    zoom
+  );
+}
+
 function setBackground(config) {
   if (isAR) return;
   const type = config?.type || "none";
   const url = config?.url || "";
+  const focusX = typeof config.focusX === "number" ? config.focusX : 0.5;
+  const focusY = typeof config.focusY === "number" ? config.focusY : 0.5;
+  const zoom = typeof config.zoom === "number" ? config.zoom : 1;
+
+  if (
+    (type === "image" || type === "video") &&
+    url &&
+    rasterBackgroundState &&
+    rasterBackgroundState.url === url &&
+    rasterBackgroundState.type === type
+  ) {
+    rasterBackgroundState.focusX = focusX;
+    rasterBackgroundState.focusY = focusY;
+    rasterBackgroundState.zoom = zoom;
+    refreshRasterBackgroundCover();
+    return;
+  }
 
   clearRoom();
   clearVideoBackground();
+  rasterBackgroundState = null;
 
   if (type === "none") {
     scene.background = new THREE.Color(0xffffff);
@@ -255,10 +333,21 @@ function setBackground(config) {
 
   if (type === "image" && url) {
     const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
     loader.load(
       url,
       (texture) => {
+        const viewAspect = window.innerWidth / window.innerHeight;
+        applyRasterCoverToTexture(texture, viewAspect, focusX, focusY, zoom);
         scene.background = texture;
+        rasterBackgroundState = {
+          texture,
+          focusX,
+          focusY,
+          zoom,
+          url,
+          type: "image",
+        };
       },
       undefined,
       () => {
@@ -270,18 +359,47 @@ function setBackground(config) {
 
   if (type === "video" && url) {
     bgVideo = document.createElement("video");
+    bgVideo.crossOrigin = "anonymous";
     bgVideo.src = url;
     bgVideo.loop = true;
     bgVideo.muted = true;
     bgVideo.playsInline = true;
     bgVideo.play().catch(() => {});
     bgVideoTexture = new THREE.VideoTexture(bgVideo);
+    bgVideoTexture.colorSpace = THREE.SRGBColorSpace;
+    const applyVideoCover = () => {
+      applyRasterCoverToTexture(
+        bgVideoTexture,
+        window.innerWidth / window.innerHeight,
+        focusX,
+        focusY,
+        zoom
+      );
+      rasterBackgroundState = {
+        texture: bgVideoTexture,
+        focusX,
+        focusY,
+        zoom,
+        url,
+        type: "video",
+      };
+    };
+    bgVideo.addEventListener("loadedmetadata", applyVideoCover, { once: true });
     scene.background = bgVideoTexture;
+    rasterBackgroundState = {
+      texture: bgVideoTexture,
+      focusX,
+      focusY,
+      zoom,
+      url,
+      type: "video",
+    };
     return;
   }
 
   if (type === "room" && url) {
     const loader = new GLTFLoader();
+    loader.setCrossOrigin("anonymous");
     loader.load(
       url,
       (gltf) => {
@@ -384,7 +502,13 @@ window.onFlutterMessage = (jsonString) => {
   }
 
   if (data.command === 'setBackground') {
-    setBackground({ type: data.type, url: data.url });
+    setBackground({
+      type: data.type,
+      url: data.url,
+      focusX: data.focusX,
+      focusY: data.focusY,
+      zoom: data.zoom,
+    });
   }
 
   // ARCore overlay: Flutter tells us where to place the model
