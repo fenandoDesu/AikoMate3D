@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:aikomate_flutter/core/api/signup_api.dart'; // <-- your signup()
+import 'package:aikomate_flutter/core/api/google_auth_api.dart';
+import 'package:aikomate_flutter/core/api/signup_api.dart';
+import 'package:aikomate_flutter/core/auth/google_sign_in_service.dart';
 
 class SignupView extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback? onLogin;
-  final VoidCallback? onSuccess;
   final VoidCallback onSignupSuccess;
 
   const SignupView({
     super.key,
     required this.onBack,
     this.onLogin,
-    this.onSuccess,
-    required this.onSignupSuccess
+    required this.onSignupSuccess,
   });
 
   @override
@@ -58,7 +58,41 @@ class _SignupViewState extends State<SignupView> {
 
     setState(() => loading = false);
 
-    widget.onSuccess?.call();
+    widget.onSignupSuccess();
+  }
+
+  Future<void> handleGoogle() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+
+    final outcome = await GoogleSignInService.instance.obtainIdToken();
+    if (!mounted) return;
+
+    if (!outcome.success) {
+      setState(() {
+        loading = false;
+        if (outcome.errorMessage != null) {
+          error = outcome.errorMessage;
+        }
+      });
+      return;
+    }
+
+    final result = await googleAuth(outcome.idToken!);
+    if (!mounted) return;
+
+    if (!result.success) {
+      setState(() {
+        error = result.error ?? 'Google sign-in failed';
+        loading = false;
+      });
+      return;
+    }
+
+    setState(() => loading = false);
+    widget.onSignupSuccess();
   }
 
   @override
@@ -139,6 +173,17 @@ class _SignupViewState extends State<SignupView> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text("Create"),
+          ),
+
+          const SizedBox(height: 12),
+
+          OutlinedButton(
+            onPressed: loading ? null : handleGoogle,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Colors.white54),
+            ),
+            child: const Text('Continue with Google'),
           ),
 
           const SizedBox(height: 12),

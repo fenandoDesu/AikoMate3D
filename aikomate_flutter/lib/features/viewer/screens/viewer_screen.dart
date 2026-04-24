@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
 import 'package:aikomate_flutter/core/config/env.dart';
+import 'package:aikomate_flutter/core/auth/google_sign_in_service.dart';
 import 'package:aikomate_flutter/core/storage/secure_storage.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 import 'package:aikomate_flutter/menu_sections_pages/login.dart';
@@ -445,7 +446,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
           onBack: () {
             setState(() => _overlayView = OverlayView.menu);
           },
-          onLogout: () {
+          onLogout: () async {
+            await SecureStorage.deleteToken();
+            await GoogleSignInService.instance.signOut();
+            if (!mounted) return;
             setState(() {
               _overlayView = OverlayView.menu;
               _showOptions = false;

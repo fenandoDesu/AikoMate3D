@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:aikomate_flutter/core/api/api_error.dart';
 import 'package:aikomate_flutter/core/storage/secure_storage.dart';
 import 'package:aikomate_flutter/core/config/env.dart';
 
@@ -29,8 +30,13 @@ Future<DeletionResult> deleteAccount() async {
     );
 
     if (res.statusCode != 200) {
-      final data = res.body.isNotEmpty ? jsonDecode(res.body) as Map<String, dynamic> : {};
-      return DeletionResult(success: false, error: data["detail"] ?? "Failed to delete account");
+      final data = res.body.isNotEmpty
+          ? Map<String, dynamic>.from(jsonDecode(res.body) as Map)
+          : <String, dynamic>{};
+      return DeletionResult(
+        success: false,
+        error: messageFromErrorBody(data, 'Failed to delete account'),
+      );
     }
 
     await SecureStorage.deleteToken();

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:aikomate_flutter/core/api/api_error.dart';
 import 'package:aikomate_flutter/core/storage/secure_storage.dart';
 import 'package:aikomate_flutter/core/config/env.dart';
 
@@ -28,13 +29,23 @@ Future<LoginResult> login(String email, String password) async {
       }),
     );
 
-    final data = res.body.isNotEmpty ? jsonDecode(res.body) : {};
+    final data = res.body.isNotEmpty
+        ? jsonDecode(res.body) as Map<String, dynamic>
+        : <String, dynamic>{};
 
     if (res.statusCode != 200) {
-      return LoginResult(success: false, error: data["detail"]);
+      return LoginResult(
+        success: false,
+        error: messageFromErrorBody(data, 'Login failed'),
+      );
     }
 
-    await SecureStorage.setToken(data["token"]);
+    final token = data['token'];
+    if (token is! String || token.isEmpty) {
+      return LoginResult(success: false, error: 'Invalid response');
+    }
+
+    await SecureStorage.setToken(token);
 
     return LoginResult(success: true);
   } catch (error) {

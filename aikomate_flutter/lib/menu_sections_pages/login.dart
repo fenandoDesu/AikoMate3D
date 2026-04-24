@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:aikomate_flutter/core/api/google_auth_api.dart';
 import 'package:aikomate_flutter/core/api/login_api.dart';
+import 'package:aikomate_flutter/core/auth/google_sign_in_service.dart';
 
 class LoginView extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback? onSignup;
-  final VoidCallback? onSuccess;
   final VoidCallback onLoginSuccess;
 
   const LoginView({
     super.key,
     required this.onBack,
     this.onSignup,
-    this.onSuccess,
     required this.onLoginSuccess,
   });
 
@@ -49,6 +49,40 @@ class _LoginViewState extends State<LoginView> {
 
     setState(() => loading = false);
 
+    widget.onLoginSuccess();
+  }
+
+  Future<void> handleGoogle() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+
+    final outcome = await GoogleSignInService.instance.obtainIdToken();
+    if (!mounted) return;
+
+    if (!outcome.success) {
+      setState(() {
+        loading = false;
+        if (outcome.errorMessage != null) {
+          error = outcome.errorMessage;
+        }
+      });
+      return;
+    }
+
+    final result = await googleAuth(outcome.idToken!);
+    if (!mounted) return;
+
+    if (!result.success) {
+      setState(() {
+        error = result.error ?? 'Google sign-in failed';
+        loading = false;
+      });
+      return;
+    }
+
+    setState(() => loading = false);
     widget.onLoginSuccess();
   }
 
@@ -115,6 +149,17 @@ class _LoginViewState extends State<LoginView> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text("Login"),
+          ),
+
+          const SizedBox(height: 12),
+
+          OutlinedButton(
+            onPressed: loading ? null : handleGoogle,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Colors.white54),
+            ),
+            child: const Text('Continue with Google'),
           ),
 
           const SizedBox(height: 12),

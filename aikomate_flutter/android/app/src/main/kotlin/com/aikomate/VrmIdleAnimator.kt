@@ -1,4 +1,4 @@
-package com.example.aikomate_flutter
+package com.aikomate
 
 import android.opengl.Matrix
 import android.util.Log
