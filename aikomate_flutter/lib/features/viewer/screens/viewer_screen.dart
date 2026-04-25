@@ -47,6 +47,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   String _speechLanguage = 'en-US';
   String _statusLabel = '';
   final List<Map<String, dynamic>> _pendingWebEvents = [];
+  int? _petPointerId;
 
   final UserBackgroundLoopback _userBackgroundLoopback =
       UserBackgroundLoopback();
@@ -126,6 +127,33 @@ class _ViewerScreenState extends State<ViewerScreen> {
       return;
     }
     _sendWebEvent(controller, event);
+  }
+
+  bool get _petInputEnabled => !_showOptions;
+
+  void _onPetPointerDown(PointerDownEvent event) {
+    if (!_petInputEnabled || _petPointerId != null) return;
+    _petPointerId = event.pointer;
+    _queueWebEvent({
+      "command": "petInputStart",
+      "x": event.localPosition.dx,
+      "y": event.localPosition.dy,
+    });
+  }
+
+  void _onPetPointerMove(PointerMoveEvent event) {
+    if (!_petInputEnabled || _petPointerId != event.pointer) return;
+    _queueWebEvent({
+      "command": "petInputMove",
+      "x": event.localPosition.dx,
+      "y": event.localPosition.dy,
+    });
+  }
+
+  void _onPetPointerEnd(int pointer) {
+    if (_petPointerId != pointer) return;
+    _petPointerId = null;
+    _queueWebEvent({"command": "petInputEnd"});
   }
 
   void _flushPendingWebEvents() {
@@ -220,6 +248,18 @@ class _ViewerScreenState extends State<ViewerScreen> {
           _statusLabel = data['message'] ?? 'Speech recognition failed';
         });
         break;
+      case 'petRub':
+        unawaited(_triggerPetRubHaptic());
+        break;
+    }
+  }
+
+  Future<void> _triggerPetRubHaptic() async {
+    try {
+      await HapticFeedback.vibrate();
+      await HapticFeedback.lightImpact();
+    } catch (_) {
+      // Ignore unsupported haptics on this device/runtime.
     }
   }
 
@@ -577,6 +617,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 action: PermissionResponseAction.GRANT,
               );
             },
+            ),
+          ),
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: _onPetPointerDown,
+              onPointerMove: _onPetPointerMove,
+              onPointerUp: (event) => _onPetPointerEnd(event.pointer),
+              onPointerCancel: (event) => _onPetPointerEnd(event.pointer),
             ),
           ),
 
