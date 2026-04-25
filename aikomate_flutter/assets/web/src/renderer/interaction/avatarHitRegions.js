@@ -82,8 +82,8 @@ export function attachAvatarHitRegions(body) {
     const mat = new THREE.MeshBasicMaterial({
       color: 0x00d4ff,
       transparent: true,
-      opacity: 0.18,
-      wireframe: true,
+      opacity: 0,
+      wireframe: false,
       depthWrite: false,
       depthTest: true,
     });

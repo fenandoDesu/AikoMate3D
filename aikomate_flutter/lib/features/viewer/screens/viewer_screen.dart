@@ -225,6 +225,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
         _loadVRM();
         unawaited(_checkSpeechSupport());
         _flushPendingWebEvents();
+        _queueWebEvent({
+          "command": "setIntimacy",
+          "value": _aiService.intimacy.value,
+        });
         unawaited(_loadSavedBackground());
         break;
       case 'speechTranscript':
@@ -250,6 +254,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
         break;
       case 'petRub':
         unawaited(_triggerPetRubHaptic());
+        break;
+      case 'intimacy_update':
+        final raw = data['intimacy'];
+        if (raw is num) {
+          _aiService.intimacy.value = raw.round().clamp(0, 5);
+        }
         break;
     }
   }

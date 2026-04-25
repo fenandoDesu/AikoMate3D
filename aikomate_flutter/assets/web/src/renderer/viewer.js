@@ -181,6 +181,8 @@ let petTouchEndTimer = null;
 let petActivePointerId = null;
 /** @type {Promise<void> | null} */
 let heartPreloadPromise = null;
+let petIntimacyLevel = 0;
+let petProgress = 0;
 const petInput = {
   isDown: false,
   nearHead: false,
@@ -189,6 +191,38 @@ const petInput = {
   movementAccum: 0,
   rubActiveUntilMs: 0,
 };
+
+function petsRequired(level) {
+  // Increasing effort curve per level (10, 20, 34, 52, ...).
+  return 10 + level * 8 + level * level * 2;
+}
+
+function emitIntimacyUpdate() {
+  try {
+    window.flutter_inappwebview.callHandler(
+      "FlutterBridge",
+      JSON.stringify({ event: "intimacy_update", intimacy: petIntimacyLevel })
+    );
+  } catch (_) {
+    /* no bridge available */
+  }
+}
+
+function registerPetHeart() {
+  petProgress += 1;
+  const req = petsRequired(petIntimacyLevel);
+  if (petProgress >= req) {
+    petIntimacyLevel += 1;
+    petProgress = 0;
+    emitIntimacyUpdate();
+  }
+}
+
+function setPetIntimacyLevel(level) {
+  const next = Number.isFinite(level) ? Math.max(0, Math.round(level)) : 0;
+  petIntimacyLevel = next;
+  petProgress = 0;
+}
 
 function ensureHeartCached() {
   if (isPropCached("heart")) return true;
@@ -481,6 +515,7 @@ function trySpawnPetHeart(clientX, clientY) {
 
   lastHeartSpawnTs = now;
   activePetHearts += 1;
+  registerPetHeart();
   petDebug("heart spawned", { activePetHearts });
 
   const randomFactor = 0.8 + Math.random() * 0.4;
@@ -1112,6 +1147,10 @@ window.onFlutterMessage = (jsonString) => {
 
   if (data.command === 'petInputEnd') {
     onPetInputEnd();
+  }
+
+  if (data.command === 'setIntimacy') {
+    setPetIntimacyLevel(Number(data.value));
   }
 
   if (data.event === 'start_speech') {
