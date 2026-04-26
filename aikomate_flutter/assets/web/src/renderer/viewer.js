@@ -101,23 +101,7 @@ const clock = new THREE.Clock();
 let elapsedTime = 0;
 
 // ─── Head petting + heart props (normal mode) ───────────────────────────────
-const PET_THROTTLE_MS = 70;
-/** Direction-change scrub detector (desktop-like), tuned for touch jitter. */
-const PET_DIRECTION_CHANGE_THRESHOLD = 6;
-const PET_MIN_DX_PX = 2;
-const PET_POINT_WINDOW_MS = 550;
-const PET_POINT_BUFFER_MAX = 20;
-const PET_SEGMENT_WINDOW_MS = 900;
-const PET_ACTIVE_PULSE_MS = 380;
-const PET_SEGMENT_STROKE_GAP_MS = 650;
-const PET_SEGMENT_MIN_TRAVEL_PX = 12;
-const PET_SINGLE_STROKE_TRIGGER_PX = 7;
-const PET_HOLD_RUB_TRIGGER_PX = 10;
-const PET_TOUCH_END_GRACE_MS = 180;
-const PET_ANY_MOVEMENT_TRIGGER_PX = 26;
-const PET_ANY_MOVEMENT_DECAY_PER_SAMPLE = 0.85;
 const PET_ACTIVE_HOLD_MS = 500;
-const PET_WARMUP_MS = 0;
 const PET_MOVEMENT_PER_HEART_PX = 20;
 const PET_HEART_COOLDOWN_MS = 500;
 const MAX_ACTIVE_HEARTS = 10;
@@ -134,51 +118,11 @@ const HEART_ASSET_URL = new URL("../../3d_objects/heart.glb", import.meta.url).h
 
 const _heartOrbitPos = new THREE.Vector3();
 const _heartCandidatePos = new THREE.Vector3();
-const _headBoneWorldQuat = new THREE.Quaternion();
 const _lastHeartSpawnWorldPositions = [];
 
-let petPointerInstalled = false;
-let lastPetRayTs = 0;
 let lastHeartSpawnTs = 0;
 let activePetHearts = 0;
-
-let pointerDown = false;
-let lastPointerClientX = 0;
-let lastPointerClientY = 0;
-/** True if the current stroke started with pointerdown on the head hit region. */
-let petPointerDownOnHead = false;
-/** Latched once rub threshold is reached until lift or leaving the head hitbox. */
-let pettingRubbing = false;
-let lastPetMotionClientX = 0;
-let lastPetMotionClientY = 0;
-/** @type {number | null} */
-let petCapturedPointerId = null;
-/** @type {number | null} */
-let petActiveTouchId = null;
 const _petDebugTsByKey = new Map();
-const petState = {
-  points: [],
-  directionChanges: 0,
-  lastDirectionX: 0,
-};
-const petSegmentState = {
-  points: [],
-  directionChanges: 0,
-  lastDirectionX: 0,
-  lastHeadTouchX: 0,
-  lastHeadTouchY: 0,
-  lastHeadTouchTs: 0,
-};
-let petRubActiveUntilMs = 0;
-let petStrokeMoveTriggered = false;
-let petHoldRubAccumPx = 0;
-let petAnyMovementAccumPx = 0;
-let petStrokeStartTs = 0;
-let petMovementAccumPx = 0;
-/** @type {ReturnType<typeof setTimeout> | null} */
-let petTouchEndTimer = null;
-/** @type {number | null} */
-let petActivePointerId = null;
 /** @type {Promise<void> | null} */
 let heartPreloadPromise = null;
 let petIntimacyLevel = 0;
@@ -339,87 +283,6 @@ function petDebug(message, data, throttleKey = "", throttleMs = 0) {
   }
 }
 
-function resetPettingGesture() {
-  petPointerDownOnHead = false;
-  pettingRubbing = false;
-  petRubActiveUntilMs = 0;
-  petStrokeMoveTriggered = false;
-  petHoldRubAccumPx = 0;
-  petAnyMovementAccumPx = 0;
-  petStrokeStartTs = 0;
-  petMovementAccumPx = 0;
-  petState.points.length = 0;
-  petState.directionChanges = 0;
-  petState.lastDirectionX = 0;
-}
-
-function clearPetTouchEndTimer() {
-  if (petTouchEndTimer != null) {
-    clearTimeout(petTouchEndTimer);
-    petTouchEndTimer = null;
-  }
-}
-
-function schedulePetTouchEnd(reason) {
-  clearPetTouchEndTimer();
-  petTouchEndTimer = setTimeout(() => {
-    petTouchEndTimer = null;
-    applyPetStrokeEnd(reason);
-  }, PET_TOUCH_END_GRACE_MS);
-}
-
-function applyPetStrokeEnd(reason = "unknown") {
-  clearPetTouchEndTimer();
-  const hadActiveHeadStroke = pointerDown || petPointerDownOnHead || pettingRubbing;
-  if (petCapturedPointerId != null) {
-    try {
-      canvas.releasePointerCapture(petCapturedPointerId);
-    } catch (_) {
-      /* already released */
-    }
-    petCapturedPointerId = null;
-  }
-  pointerDown = false;
-  petActivePointerId = null;
-  petActiveTouchId = null;
-  if (hadActiveHeadStroke) petDebug("stroke end", { reason });
-  resetPettingGesture();
-}
-
-function applyPetStrokeStart(clientX, clientY) {
-  lastPointerClientX = clientX;
-  lastPointerClientY = clientY;
-  const hit0 = pickInteractiveBone(
-    clientX,
-    clientY,
-    avatarNormalizedBody,
-    camera,
-    canvas
-  );
-  const startsOnHead = hit0?.name === "head";
-  pointerDown = startsOnHead;
-  petPointerDownOnHead = startsOnHead;
-  petDebug("stroke start", {
-    x: Math.round(clientX),
-    y: Math.round(clientY),
-    hitRegion: hit0?.name ?? null,
-    headDown: startsOnHead,
-  });
-  if (!startsOnHead) {
-    resetPettingGesture();
-    return;
-  }
-  pettingRubbing = false;
-  petState.points.length = 0;
-  petState.directionChanges = 0;
-  petState.lastDirectionX = 0;
-  petStrokeStartTs = performance.now();
-  petMovementAccumPx = 0;
-  petRubActiveUntilMs = 0;
-  lastPetMotionClientX = clientX;
-  lastPetMotionClientY = clientY;
-}
-
 function emitPetRubHaptic() {
   try {
     window.flutter_inappwebview.callHandler(
@@ -429,67 +292,6 @@ function emitPetRubHaptic() {
   } catch (_) {
     /* no bridge available */
   }
-}
-
-/**
- * @param {number} clientX
- * @param {number} clientY
- * @returns {boolean} true if sample was applied (on head stroke)
- */
-function applyPetMotionSample(clientX, clientY) {
-  lastPointerClientX = clientX;
-  lastPointerClientY = clientY;
-  if (!pointerDown || !petPointerDownOnHead) return false;
-  const now = performance.now();
-  const hitM = pickInteractiveBone(
-    clientX,
-    clientY,
-    avatarNormalizedBody,
-    camera,
-    canvas
-  );
-  if (hitM?.name !== "head") {
-    pettingRubbing = false;
-    petState.points.length = 0;
-    petState.directionChanges = 0;
-    petState.lastDirectionX = 0;
-    petMovementAccumPx = 0;
-    petRubActiveUntilMs = 0;
-    petDebug(
-      "motion left head hitbox; reset rub",
-      { x: Math.round(clientX), y: Math.round(clientY), hitRegion: hitM?.name ?? null },
-      "left-head",
-      300
-    );
-    return false;
-  }
-  pettingRubbing = true;
-  petRubActiveUntilMs = now + PET_ACTIVE_HOLD_MS;
-  const dx = clientX - lastPetMotionClientX;
-  const dy = clientY - lastPetMotionClientY;
-  const move = Math.hypot(dx, dy);
-  if (move >= 0.5) {
-    petMovementAccumPx += move;
-  }
-
-  const elapsedSinceDown = now - petStrokeStartTs;
-  if (petMovementAccumPx >= PET_MOVEMENT_PER_HEART_PX) {
-    while (petMovementAccumPx >= PET_MOVEMENT_PER_HEART_PX) {
-      petMovementAccumPx -= PET_MOVEMENT_PER_HEART_PX;
-      emitPetRubHaptic();
-      trySpawnPetHeart(clientX, clientY);
-      if (now - lastHeartSpawnTs < PET_HEART_COOLDOWN_MS) break;
-    }
-    petDebug("rub trigger (continuous movement)", {
-      elapsedMs: Math.round(elapsedSinceDown),
-      remainingMovementPx: Number(petMovementAccumPx.toFixed(2)),
-      chunkPx: PET_MOVEMENT_PER_HEART_PX,
-    });
-  }
-
-  lastPetMotionClientX = clientX;
-  lastPetMotionClientY = clientY;
-  return true;
 }
 
 function trySpawnPetHeart(clientX, clientY) {
@@ -571,102 +373,6 @@ function trySpawnPetHeart(clientX, clientY) {
   });
 }
 
-function onPointerForPetting(ev) {
-  if (
-    ev.pointerType !== "mouse" &&
-    ev.pointerType !== "pen" &&
-    ev.pointerType !== "touch"
-  ) {
-    /* Mobile/WebView pointer events can report odd pointerType during cancel; ignore unknown types. */
-    return;
-  }
-
-  if (ev.type === "pointerdown") {
-    petActivePointerId = typeof ev.pointerId === "number" ? ev.pointerId : null;
-    applyPetStrokeStart(ev.clientX, ev.clientY);
-    /*
-     * setPointerCapture + lostpointercapture breaks many embedded WebViews: capture is
-     * "lost" immediately and we were treating that like finger-up, killing the gesture.
-     * Only capture for mouse / pen so moves stay on the canvas.
-     */
-    if (petPointerDownOnHead && typeof ev.pointerId === "number") {
-      try {
-        canvas.setPointerCapture(ev.pointerId);
-        petCapturedPointerId = ev.pointerId;
-      } catch (_) {
-        petCapturedPointerId = null;
-      }
-    }
-    return;
-  }
-
-  if (
-    ev.type === "pointermove" &&
-    pointerDown &&
-    petPointerDownOnHead &&
-    (petActivePointerId === null || ev.pointerId === petActivePointerId)
-  ) {
-    lastPointerClientX = ev.clientX;
-    lastPointerClientY = ev.clientY;
-    applyPetMotionSample(ev.clientX, ev.clientY);
-  }
-
-  if (
-    (ev.type === "pointerup" || ev.type === "pointercancel") &&
-    (petActivePointerId === null || ev.pointerId === petActivePointerId)
-  ) {
-    // Touch pointer streams in WebView can emit premature pointerup while still moving.
-    // Delay touch end slightly; upcoming move/down cancels this timer.
-    if (ev.pointerType === "touch") {
-      schedulePetTouchEnd(`pointer:${ev.type}`);
-    } else {
-      applyPetStrokeEnd(`pointer:${ev.type}`);
-    }
-  }
-}
-
-function onPetTouchStart(ev) {
-  if (petActiveTouchId !== null || ev.changedTouches.length === 0) return;
-  ev.preventDefault();
-  clearPetTouchEndTimer();
-  const t = ev.changedTouches[0];
-  petActiveTouchId = t.identifier;
-  applyPetStrokeStart(t.clientX, t.clientY);
-}
-
-function onPetTouchMove(ev) {
-  if (petActiveTouchId === null || ev.touches.length === 0) return;
-  let t = null;
-  for (let i = 0; i < ev.touches.length; i += 1) {
-    if (ev.touches[i].identifier === petActiveTouchId) {
-      t = ev.touches[i];
-      break;
-    }
-  }
-  if (!t) return;
-  ev.preventDefault();
-  clearPetTouchEndTimer();
-  applyPetMotionSample(t.clientX, t.clientY);
-}
-
-function onPetTouchEnd(ev) {
-  if (petActiveTouchId === null) return;
-  for (let i = 0; i < ev.changedTouches.length; i += 1) {
-    const t = ev.changedTouches[i];
-    if (t.identifier === petActiveTouchId) {
-      // WebView can emit premature touchend while finger is still gliding.
-      // Delay ending briefly; any new touchstart/touchmove cancels this timer.
-      schedulePetTouchEnd(`touch:${ev.type}`);
-      return;
-    }
-  }
-}
-
-function ensurePetPointerListeners() {
-  // Disabled: Flutter now provides authoritative pan/rub input via petInputStart/Move/End.
-  if (petPointerInstalled) return;
-  petPointerInstalled = true;
-}
 
 function focusCameraOnAvatar() {
   const target = new THREE.Vector3(0, 1.4, 0);
@@ -1089,7 +795,6 @@ function loadVRM(url) {
       if (!isAR) {
         attachAvatarHitRegions(avatarNormalizedBody);
         ensureHeartCached();
-        ensurePetPointerListeners();
       }
 
       console.log(`VRM loaded: ${vrmVersion}`);
