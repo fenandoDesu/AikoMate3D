@@ -30,6 +30,9 @@ class AiCompanionService {
   final String avatarName;
   final String userName;
 
+  /// Template / persona instructions; sent as `prompt` when non-empty.
+  final String? personalityPrompt;
+
   WebSocketChannel? _channel;
   StreamSubscription? _wsSubscription;
   Future<void>? _connectionFuture;
@@ -51,9 +54,11 @@ class AiCompanionService {
   AiCompanionService({
     this.avatarName = "Haruna",
     this.userName = "Fernando",
+    this.personalityPrompt,
   }) {
-    _playerSubscription =
-        _player.onPlayerComplete.listen((_) => _handlePlaybackComplete());
+    _playerSubscription = _player.onPlayerComplete.listen(
+      (_) => _handlePlaybackComplete(),
+    );
   }
 
   Stream<String> get logStream => _logController.stream;
@@ -89,14 +94,19 @@ class AiCompanionService {
     }
     final fishAudioId = "a2fcdd688eed4521baf39ffc05ca7d3f";
 
-    final payload = jsonEncode({
+    final payloadMap = <String, dynamic>{
       "text": text,
       "language": language,
       "avatar_name": avatarName,
       "user_name": userName,
       "fish_audio_id": fishAudioId,
       "intimacy": intimacy.value.clamp(0, 5),
-    });
+    };
+    final p = personalityPrompt?.trim();
+    if (p != null && p.isNotEmpty) {
+      payloadMap["prompt"] = p;
+    }
+    final payload = jsonEncode(payloadMap);
 
     Future<void> attemptSend() async {
       print('Companion WS send -> "$text" [$language]');
@@ -129,9 +139,10 @@ class AiCompanionService {
     }
 
     final uri = Uri.parse(Env.chatWsUrl);
-    _channel = IOWebSocketChannel.connect(uri, headers: {
-      "Authorization": "Bearer $token",
-    });
+    _channel = IOWebSocketChannel.connect(
+      uri,
+      headers: {"Authorization": "Bearer $token"},
+    );
 
     _wsSubscription = _channel!.stream.listen(
       _handleRawMessage,
@@ -148,7 +159,10 @@ class AiCompanionService {
     if (_disposed) return;
     if (data is String) {
       final textPreview = data.toString();
-      final preview = textPreview.substring(0, math.min(120, textPreview.length));
+      final preview = textPreview.substring(
+        0,
+        math.min(120, textPreview.length),
+      );
       print('Companion WS text msg: $preview');
       _handleJsonMessage(jsonDecode(data));
       return;
@@ -225,7 +239,8 @@ class AiCompanionService {
     if (_fullPhonemes.isNotEmpty) {
       final last = _fullPhonemes.last;
       offset =
-          (last["start"] as num).toDouble() + (last["duration"] as num).toDouble();
+          (last["start"] as num).toDouble() +
+          (last["duration"] as num).toDouble();
     }
 
     for (final raw in phonemeList) {
@@ -241,8 +256,7 @@ class AiCompanionService {
       });
     }
 
-    final phonemeSnapshot =
-        List<Map<String, dynamic>>.from(_fullPhonemes);
+    final phonemeSnapshot = List<Map<String, dynamic>>.from(_fullPhonemes);
     if (_pendingStartSpeech == null && !_audioStarted) {
       _pendingStartSpeech = {
         "event": "start_speech",
@@ -262,10 +276,7 @@ class AiCompanionService {
   void _maybeEndSpeech() {
     if (!_streamEnded) return;
     if (_isPlaying || _audioQueue.isNotEmpty) return;
-    _emitEvent({
-      "event": "end_speech",
-      "reply_text": _replyText.trim(),
-    });
+    _emitEvent({"event": "end_speech", "reply_text": _replyText.trim()});
     _streamEnded = false;
     _audioStarted = false;
     _pendingStartSpeech = null;
@@ -279,7 +290,9 @@ class AiCompanionService {
 
     final pcm = _extractPlayablePcm(buffer);
     if (pcm == null) {
-      _logController.add("Dropped ${buffer.length} bytes of audio (unknown format)");
+      _logController.add(
+        "Dropped ${buffer.length} bytes of audio (unknown format)",
+      );
       return;
     }
 
@@ -314,8 +327,15 @@ class AiCompanionService {
 
     final count = bytes.length ~/ 4;
     if (count < 4) return null;
-    final floatBuffer = Float32List.view(bytes.buffer, bytes.offsetInBytes, count);
-    final maxAbs = floatBuffer.fold<double>(0.0, (prev, value) => math.max(prev, value.abs()));
+    final floatBuffer = Float32List.view(
+      bytes.buffer,
+      bytes.offsetInBytes,
+      count,
+    );
+    final maxAbs = floatBuffer.fold<double>(
+      0.0,
+      (prev, value) => math.max(prev, value.abs()),
+    );
     if (maxAbs <= 0.01) return null;
 
     final output = Int16List(count);
@@ -335,7 +355,10 @@ class AiCompanionService {
     final count = bytes.length ~/ 2;
     if (count < 4) return null;
     final ints = Int16List.view(bytes.buffer, bytes.offsetInBytes, count);
-    final maxAbs = ints.fold<int>(0, (prev, value) => math.max(prev, value.abs()));
+    final maxAbs = ints.fold<int>(
+      0,
+      (prev, value) => math.max(prev, value.abs()),
+    );
     if (maxAbs <= 100) return null;
 
     final trimmed = bytes.sublist(0, count * 2);
@@ -392,8 +415,7 @@ class AiCompanionService {
     if (_audioDurationQueue.isNotEmpty) {
       final duration = _audioDurationQueue.removeAt(0);
       _audioDurationAccum += duration;
-      _queuedAudioDuration =
-          math.max(0.0, _queuedAudioDuration - duration);
+      _queuedAudioDuration = math.max(0.0, _queuedAudioDuration - duration);
     }
     if (_audioQueue.isNotEmpty) {
       _schedulePlayNext();

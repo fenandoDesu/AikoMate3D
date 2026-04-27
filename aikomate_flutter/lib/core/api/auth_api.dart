@@ -25,10 +25,15 @@ Future<AuthResult> auth() async {
 
     if (res.statusCode != 200) return AuthResult(success: false, error: "Invalid token", result: null);
 
-    final data = res.body.isNotEmpty ? jsonDecode(res.body) : {};
+    final data = res.body.isNotEmpty
+        ? jsonDecode(res.body)
+        : <String, dynamic>{};
 
-    // result returns id, name, email, credits
-    return AuthResult(success: true, error: null, result: data);
+    // result returns id, name, email, credits, admin, ...
+    final map = data is Map<String, dynamic>
+        ? data
+        : Map<String, dynamic>.from(data as Map);
+    return AuthResult(success: true, error: null, result: map);
   } catch (error) {
     return AuthResult(
       success: false,

@@ -18,10 +18,15 @@ import 'package:aikomate_flutter/menu_sections_pages/background.dart';
 import 'package:aikomate_flutter/core/api/auth_api.dart';
 import 'package:aikomate_flutter/core/storage/settings_storage.dart';
 import 'package:aikomate_flutter/features/viewer/user_background_loopback.dart';
+import 'package:aikomate_flutter/features/viewer/viewer_launch_args.dart';
+import 'package:aikomate_flutter/features/viewer/vrm_remote_loopback_cache.dart';
 import 'package:aikomate_flutter/features/viewer/widgets/intimacy_thermometer.dart';
 
 class ViewerScreen extends StatefulWidget {
-  const ViewerScreen({super.key});
+  const ViewerScreen({super.key, this.launchArgs});
+
+  /// When set (e.g. from Discover), loads this template’s VRM URL and persona.
+  final ViewerLaunchArgs? launchArgs;
 
   @override
   State<ViewerScreen> createState() => _ViewerScreenState();
@@ -52,10 +57,28 @@ class _ViewerScreenState extends State<ViewerScreen> {
   final UserBackgroundLoopback _userBackgroundLoopback =
       UserBackgroundLoopback();
 
+  final VrmRemoteLoopbackCache _vrmRemoteCache = VrmRemoteLoopbackCache();
+
+  /// True while Dart is downloading a remote `.vrm` to bypass browser CORS.
+  bool _vrmDownloading = false;
+  double? _vrmDownloadFraction;
+  String _vrmOverlayCaption = '';
+
   @override
   void initState() {
     super.initState();
-    _aiService = AiCompanionService();
+    final a = widget.launchArgs;
+    _aiService = AiCompanionService(
+      avatarName:
+          (a?.displayName.trim().isNotEmpty ?? false)
+              ? a!.displayName.trim()
+              : 'Haruna',
+      userName:
+          (a?.userName?.trim().isNotEmpty ?? false)
+              ? a!.userName!.trim()
+              : 'Fernando',
+      personalityPrompt: a?.personalityPrompt,
+    );
     _logSubscription = _aiService.logStream.listen((message) {
       if (!mounted) return;
       setState(() {
@@ -89,13 +112,83 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _messageController.dispose();
     _localhostServer?.close();
     _userBackgroundLoopback.dispose();
+    _vrmRemoteCache.dispose();
     super.dispose();
   }
 
-  void _loadVRM() {
-    const vrmUrl =
-        'http://localhost:8080/assets/web/models/UltimateLoverH1.vrm';
-    _queueWebEvent({'command': 'loadVRM', 'url': vrmUrl});
+  String _bundledVrmHttpUrl() =>
+      'http://localhost:$_serverPort/assets/web/models/UltimateLoverH1.vrm';
+
+  bool _isLoopbackHost(Uri uri) {
+    final h = uri.host.toLowerCase();
+    return h == 'localhost' || h == '127.0.0.1';
+  }
+
+  /// Remote CDN URLs fail CORS from `http://localhost:8080`; download in Dart
+  /// and serve from a second loopback server with CORS headers.
+  Future<void> _prepareAndLoadVrm() async {
+    final remote = widget.launchArgs?.vrmUrl.trim();
+    final fallback = _bundledVrmHttpUrl();
+    String urlToLoad;
+
+    if (remote == null || remote.isEmpty) {
+      urlToLoad = fallback;
+    } else {
+      final parsed = Uri.tryParse(remote);
+      if (parsed != null && _isLoopbackHost(parsed)) {
+        urlToLoad = remote;
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _vrmDownloading = true;
+          _vrmDownloadFraction = null;
+          _vrmOverlayCaption = 'Preparing avatar…';
+          _statusLabel = 'Preparing avatar…';
+        });
+        try {
+          urlToLoad = await _vrmRemoteCache.cacheFromRemoteUrl(
+            remote,
+            templateId: widget.launchArgs?.templateId,
+            onSource: ({required bool fromSealedStore}) {
+              if (!mounted) return;
+              setState(() {
+                _vrmOverlayCaption =
+                    fromSealedStore
+                        ? 'Loading saved avatar…'
+                        : 'Downloading avatar…';
+                _statusLabel = _vrmOverlayCaption;
+              });
+            },
+            onProgress: (f) {
+              if (!mounted) return;
+              setState(() => _vrmDownloadFraction = f);
+            },
+          );
+        } catch (e, st) {
+          debugPrint('VRM proxy download failed: $e\n$st');
+          if (mounted) {
+            setState(() {
+              _statusLabel = 'Avatar download failed; using default model';
+            });
+          }
+          urlToLoad = fallback;
+        } finally {
+          if (mounted) {
+            setState(() {
+              _vrmDownloading = false;
+              _vrmDownloadFraction = null;
+              _vrmOverlayCaption = '';
+            });
+          }
+        }
+      }
+    }
+
+    if (!mounted) return;
+    _queueWebEvent({'command': 'loadVRM', 'url': urlToLoad});
+    if (urlToLoad != fallback) {
+      setState(() => _statusLabel = 'Loading avatar in 3D…');
+    }
   }
 
   Future<void> _loadSavedBackground() async {
@@ -222,7 +315,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final event = data['event'];
     switch (event) {
       case 'ready':
-        _loadVRM();
+        unawaited(_prepareAndLoadVrm());
         unawaited(_checkSpeechSupport());
         _flushPendingWebEvents();
         _queueWebEvent({
@@ -260,6 +353,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
         if (raw is num) {
           _aiService.intimacy.value = raw.round().clamp(0, 5);
         }
+        break;
+      case 'vrmLoaded':
+        if (!mounted) return;
+        setState(() => _statusLabel = 'Avatar ready');
+        break;
+      case 'vrmError':
+        if (!mounted) return;
+        setState(() {
+          _statusLabel =
+              'Avatar load failed: ${data['error'] ?? 'unknown error'}';
+        });
         break;
     }
   }
@@ -407,7 +511,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
       case AiCompanionConnectionState.error:
         return 'Companion error';
       case AiCompanionConnectionState.idle:
-      default:
         return '';
     }
   }
@@ -567,66 +670,66 @@ class _ViewerScreenState extends State<ViewerScreen> {
         children: [
           Positioned.fill(
             child: InAppWebView(
-            initialUrlRequest: URLRequest(
-              url: WebUri(
-                'http://localhost:$_serverPort/assets/web/index.html?mode=normal',
+              initialUrlRequest: URLRequest(
+                url: WebUri(
+                  'http://localhost:$_serverPort/assets/web/index.html?mode=normal',
+                ),
               ),
-            ),
-            initialSettings: InAppWebViewSettings(
-              javaScriptEnabled: true,
-              mediaPlaybackRequiresUserGesture: false,
-              allowsInlineMediaPlayback: true,
-              disableVerticalScroll: true,
-              disableHorizontalScroll: true,
-              disallowOverScroll: true,
-              alwaysBounceVertical: false,
-              alwaysBounceHorizontal: false,
-              supportZoom: false,
-              builtInZoomControls: false,
-              displayZoomControls: false,
-              overScrollMode: OverScrollMode.NEVER,
-              verticalScrollBarEnabled: false,
-              horizontalScrollBarEnabled: false,
-            ),
-            onWebViewCreated: (controller) {
-              _controller = controller;
-              if (_pendingWebEvents.isNotEmpty) {
-                final pending = List<Map<String, dynamic>>.from(
-                  _pendingWebEvents,
-                );
-                _pendingWebEvents.clear();
-                for (final event in pending) {
-                  _sendWebEvent(controller, event);
-                }
-              }
-              controller.addJavaScriptHandler(
-                handlerName: 'FlutterBridge',
-                callback: (args) {
-                  if (args.isEmpty) return;
-                  try {
-                    final data = jsonDecode(args[0]);
-                    debugPrint('JS -> Flutter: ${data['event']}');
-                    _handleFlutterMessage(data);
-                  } catch (error) {
-                    debugPrint('JS bridge error: $error');
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                mediaPlaybackRequiresUserGesture: false,
+                allowsInlineMediaPlayback: true,
+                disableVerticalScroll: true,
+                disableHorizontalScroll: true,
+                disallowOverScroll: true,
+                alwaysBounceVertical: false,
+                alwaysBounceHorizontal: false,
+                supportZoom: false,
+                builtInZoomControls: false,
+                displayZoomControls: false,
+                overScrollMode: OverScrollMode.NEVER,
+                verticalScrollBarEnabled: false,
+                horizontalScrollBarEnabled: false,
+              ),
+              onWebViewCreated: (controller) {
+                _controller = controller;
+                if (_pendingWebEvents.isNotEmpty) {
+                  final pending = List<Map<String, dynamic>>.from(
+                    _pendingWebEvents,
+                  );
+                  _pendingWebEvents.clear();
+                  for (final event in pending) {
+                    _sendWebEvent(controller, event);
                   }
-                },
-              );
-            },
-            onConsoleMessage: (controller, message) {
-              debugPrint('JS console: ${message.message}');
-            },
-            onReceivedError: (controller, request, error) {
-              debugPrint(
-                'WebView error: ${error.description} url: ${request.url}',
-              );
-            },
-            onPermissionRequest: (controller, request) async {
-              return PermissionResponse(
-                resources: request.resources,
-                action: PermissionResponseAction.GRANT,
-              );
-            },
+                }
+                controller.addJavaScriptHandler(
+                  handlerName: 'FlutterBridge',
+                  callback: (args) {
+                    if (args.isEmpty) return;
+                    try {
+                      final data = jsonDecode(args[0]);
+                      debugPrint('JS -> Flutter: ${data['event']}');
+                      _handleFlutterMessage(data);
+                    } catch (error) {
+                      debugPrint('JS bridge error: $error');
+                    }
+                  },
+                );
+              },
+              onConsoleMessage: (controller, message) {
+                debugPrint('JS console: ${message.message}');
+              },
+              onReceivedError: (controller, request, error) {
+                debugPrint(
+                  'WebView error: ${error.description} url: ${request.url}',
+                );
+              },
+              onPermissionRequest: (controller, request) async {
+                return PermissionResponse(
+                  resources: request.resources,
+                  action: PermissionResponseAction.GRANT,
+                );
+              },
             ),
           ),
           Positioned.fill(
@@ -648,6 +751,18 @@ class _ViewerScreenState extends State<ViewerScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (widget.launchArgs != null) ...[
+                    GlassIconButton(
+                      adaptiveIconSize: true,
+                      padding: const EdgeInsets.all(8),
+                      size: 55,
+                      radius: 15,
+                      style: GlassPresets.button,
+                      icon: Icons.arrow_back,
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   GlassIconButton(
                     adaptiveIconSize: true,
                     padding: const EdgeInsets.all(8),
@@ -752,6 +867,50 @@ class _ViewerScreenState extends State<ViewerScreen> {
               ),
             ),
           ),
+          if (_vrmDownloading)
+            Positioned.fill(
+              child: AbsorbPointer(
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(color: Color(0x99000000)),
+                  child: Center(
+                    child: Card(
+                      margin: const EdgeInsets.all(32),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 16),
+                            Text(
+                              _vrmOverlayCaption.isEmpty
+                                  ? 'Loading avatar…'
+                                  : _vrmOverlayCaption,
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            if (_vrmDownloadFraction != null) ...[
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: 240,
+                                child: LinearProgressIndicator(
+                                  value: _vrmDownloadFraction,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${(_vrmDownloadFraction! * 100).round()}%',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (_showOptions)
             Positioned.fill(
               child: AnimatedOpacity(

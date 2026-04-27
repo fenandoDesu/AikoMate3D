@@ -1,29 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'features/viewer/screens/viewer_screen.dart';
-import 'features/ai_companion/ai_companion_service.dart';
+import 'package:aikomate_flutter/app/aikomate_app.dart';
+import 'package:aikomate_flutter/core/auth/auth_session_notifier.dart';
+import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _initArChannel();
-  runApp(const AikoMateApp());
-}
-
-class AikoMateApp extends StatelessWidget {
-  const AikoMateApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'AikoMate',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const ViewerScreen(),
-    );
-  }
+  final session = AuthSessionNotifier();
+  await session.restore();
+  runApp(AikoMateApp(session: session));
 }
 
 // AR MethodChannel is handled inside ViewerScreen to reuse its companion service.
