@@ -26,6 +26,7 @@ class MainActivity : FlutterFragmentActivity() {
                             (args["token"] as? String)?.let { intent.putExtra("token", it) }
                             (args["wsUrl"] as? String)?.let { intent.putExtra("wsUrl", it) }
                             (args["avatarName"] as? String)?.let { intent.putExtra("avatarName", it) }
+                            (args["avatarVrmUrl"] as? String)?.let { intent.putExtra("avatarVrmUrl", it) }
                             (args["userName"] as? String)?.let { intent.putExtra("userName", it) }
                         }
                         startActivity(intent)

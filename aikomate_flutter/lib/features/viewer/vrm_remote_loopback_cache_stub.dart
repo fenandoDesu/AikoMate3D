@@ -8,5 +8,7 @@ class VrmRemoteLoopbackCache {
   }) async =>
       remoteUrl;
 
+  String? localFilePathForLoopbackUrl(String url) => null;
+
   void dispose() {}
 }

@@ -38,6 +38,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -46,7 +48,6 @@ class ArActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "ArActivity"
         private const val FRAGMENT_TAG = "AikoArFragment"
-        private const val MODEL_PATH = "models/UltimateLoverH1.glb"
     }
 
     data class Phoneme(val phoneme: String, val start: Double, val duration: Double)
@@ -66,7 +67,10 @@ class ArActivity : AppCompatActivity() {
     private var wsUrl: String? = null
     private var authToken: String? = null
     private var avatarName: String = "Haruna"
+    private var avatarVrmUrl: String? = null
     private var userName: String = "Fernando"
+    private var modelUri: Uri? = null
+    private var modelPathForLogs: String = ""
     private val fishAudioId = "a2fcdd688eed4521baf39ffc05ca7d3f"
     private val intimacyLevel = 4
 
@@ -91,7 +95,11 @@ class ArActivity : AppCompatActivity() {
         authToken = intent.getStringExtra("token")
         wsUrl = intent.getStringExtra("wsUrl") ?: "wss://api.japaneseblossom.com/ws/chat"
         avatarName = intent.getStringExtra("avatarName") ?: avatarName
+        avatarVrmUrl = intent.getStringExtra("avatarVrmUrl")
         userName = intent.getStringExtra("userName") ?: userName
+        val resolved = resolveModelUri(avatarVrmUrl, avatarName)
+        modelUri = resolved.first
+        modelPathForLogs = resolved.second
 
         hudTextView = findViewById(R.id.hudText)
         findViewById<TextView>(R.id.backBtn).setOnClickListener { finish() }
@@ -99,7 +107,7 @@ class ArActivity : AppCompatActivity() {
             startSpeechRecognition()
         }
 
-        vrmFactor = detectVrmFactor(MODEL_PATH)
+        vrmFactor = detectVrmFactor(modelPathForLogs)
 
         arFragment = obtainArFragment()
         configureArFragment()
@@ -230,26 +238,118 @@ class ArActivity : AppCompatActivity() {
     private fun loadModel() {
         if (modelLoading || modelRenderable != null) return
 
+        val uri = modelUri
+        if (uri == null) {
+            updateHud("No avatar selected for AR")
+            Log.e(TAG, "Cannot load AR model; no avatarVrmUrl provided.")
+            return
+        }
+
         modelLoading = true
         updateHud("Loading avatar model...")
 
         ModelRenderable.builder()
-            .setSource(this, Uri.parse(MODEL_PATH))
+            .setSource(this, uri)
             .setIsFilamentGltf(true)
-            .setRegistryId(MODEL_PATH)
+            .setRegistryId(modelPathForLogs)
             .build()
             .thenAccept { renderable ->
                 modelRenderable = renderable
                 modelLoading = false
                 updateHud("Move camera slowly to detect surfaces")
-                Log.d(TAG, "Model loaded: $MODEL_PATH")
+                Log.d(TAG, "Model loaded: $modelPathForLogs")
             }
             .exceptionally { throwable ->
                 modelLoading = false
                 updateHud("Failed to load avatar model")
-                Log.e(TAG, "Model load failed: ${throwable.message}", throwable)
+                Log.e(
+                    TAG,
+                    "Model load failed: path=$modelPathForLogs, error=${throwable.message}",
+                    throwable
+                )
                 null
             }
+    }
+
+    private fun resolveModelUri(vrmSpec: String?, displayName: String): Pair<Uri?, String> {
+        val spec = vrmSpec?.trim().orEmpty()
+        if (spec.isEmpty()) {
+            Log.e(TAG, "No avatarVrmUrl provided for avatarName=$displayName")
+            return Pair(null, "")
+        }
+
+        val asUri = runCatching { Uri.parse(spec) }.getOrNull()
+
+        // Absolute filesystem paths from user-defined download locations.
+        if (asUri == null || asUri.scheme.isNullOrEmpty()) {
+            val glbPath = ensureLocalGlbFromVrm(spec)
+            val uri = Uri.fromFile(File(glbPath))
+            Log.d(TAG, "Resolved AR model from local path: $glbPath")
+            return Pair(uri, glbPath)
+        }
+
+        // file:///... paths.
+        if (asUri.scheme.equals("file", ignoreCase = true)) {
+            val localPath = runCatching { asUri.path.orEmpty() }.getOrDefault("")
+            val glbPath = ensureLocalGlbFromVrm(localPath)
+            val uri = Uri.fromFile(File(glbPath))
+            Log.d(TAG, "Resolved AR model from file URI: $glbPath")
+            return Pair(uri, glbPath)
+        }
+
+        // For http/https/content and any other scheme, replace extension in-place.
+        val glbSpec = replaceExtensionWithGlb(spec)
+        val uri = runCatching { Uri.parse(glbSpec) }.getOrNull()
+        Log.d(TAG, "Resolved AR model from URI: $glbSpec")
+        return Pair(uri, glbSpec)
+    }
+
+    private fun ensureLocalGlbFromVrm(sourcePath: String): String {
+        val trimmed = sourcePath.trim()
+        val glbPath = replaceExtensionWithGlb(trimmed)
+        if (trimmed.equals(glbPath, ignoreCase = true)) {
+            return glbPath
+        }
+
+        val vrmFile = File(trimmed)
+        val glbFile = File(glbPath)
+
+        // If GLB already exists, reuse it.
+        if (glbFile.exists() && glbFile.length() > 0L) {
+            return glbFile.absolutePath
+        }
+
+        // Create ".glb" copy from ".vrm" (same bytes, different extension).
+        if (vrmFile.exists() && vrmFile.isFile) {
+            try {
+                glbFile.parentFile?.mkdirs()
+                vrmFile.copyTo(glbFile, overwrite = true)
+                Log.d(TAG, "Created GLB copy from VRM: ${vrmFile.absolutePath} -> ${glbFile.absolutePath}")
+                return glbFile.absolutePath
+            } catch (e: IOException) {
+                Log.e(TAG, "Failed creating GLB copy from VRM: ${e.message}", e)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Permission denied creating GLB copy from VRM: ${e.message}", e)
+            }
+        }
+
+        // Return target path anyway; loader will report the concrete load failure.
+        return glbFile.absolutePath
+    }
+
+    private fun replaceExtensionWithGlb(value: String): String {
+        val noQuery = value.substringBefore('?').substringBefore('#')
+        val querySuffix = value.removePrefix(noQuery)
+        val lower = noQuery.lowercase()
+
+        val glbBase =
+            when {
+                lower.endsWith(".vrm") -> noQuery.dropLast(4) + ".glb"
+                lower.endsWith(".glb") -> noQuery
+                noQuery.contains('.') -> noQuery.substringBeforeLast('.') + ".glb"
+                else -> "$noQuery.glb"
+            }
+        return glbBase + querySuffix
     }
 
     private fun placeAvatar(anchor: Anchor, successHud: String) {

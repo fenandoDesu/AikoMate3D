@@ -66,6 +66,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   bool _vrmDownloading = false;
   double? _vrmDownloadFraction;
   String _vrmOverlayCaption = '';
+  String? _activeVrmUrlForViewer;
+  String? _activeVrmLocalPathForNative;
 
   @override
   void initState() {
@@ -133,13 +135,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final remote = widget.launchArgs?.vrmUrl.trim();
     final fallback = _bundledVrmHttpUrl();
     String urlToLoad;
+    String? localPathForNative;
 
     if (remote == null || remote.isEmpty) {
       urlToLoad = fallback;
+      localPathForNative = null;
     } else {
       final parsed = Uri.tryParse(remote);
       if (parsed != null && _isLoopbackHost(parsed)) {
         urlToLoad = remote;
+        localPathForNative = _vrmRemoteCache.localFilePathForLoopbackUrl(remote);
       } else {
         if (!mounted) return;
         setState(() {
@@ -167,6 +172,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
               setState(() => _vrmDownloadFraction = f);
             },
           );
+          localPathForNative = _vrmRemoteCache.localFilePathForLoopbackUrl(urlToLoad);
         } catch (e, st) {
           debugPrint('VRM proxy download failed: $e\n$st');
           if (mounted) {
@@ -175,6 +181,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
             });
           }
           urlToLoad = fallback;
+          localPathForNative = null;
         } finally {
           if (mounted) {
             setState(() {
@@ -188,6 +195,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
     }
 
     if (!mounted) return;
+    _activeVrmUrlForViewer = urlToLoad;
+    _activeVrmLocalPathForNative = localPathForNative;
     _queueWebEvent({'command': 'loadVRM', 'url': urlToLoad});
     if (urlToLoad != fallback) {
       setState(() => _statusLabel = 'Loading avatar in 3D…');
@@ -526,6 +535,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
         'token': token,
         'wsUrl': Env.chatWsUrl,
         'avatarName': _aiService.avatarName,
+        'avatarVrmUrl':
+            _activeVrmLocalPathForNative ??
+            _activeVrmUrlForViewer ??
+            widget.launchArgs?.vrmUrl,
         'userName': _aiService.userName,
       });
     } catch (error) {

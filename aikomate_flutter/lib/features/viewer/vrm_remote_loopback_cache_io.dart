@@ -229,6 +229,24 @@ class VrmRemoteLoopbackCache {
     }
   }
 
+  /// If [url] is a loopback URL returned by [cacheFromRemoteUrl], returns the
+  /// backing local plaintext `.vrm` file path for native consumers (AR).
+  String? localFilePathForLoopbackUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return null;
+
+    final segs = uri.pathSegments;
+    if (segs.length != 2 || segs[0] != 'cached-vrm') return null;
+
+    final token = int.tryParse(segs[1]);
+    if (token == null) return null;
+
+    return _tokenToFile[token]?.path;
+  }
+
   void dispose() {
     for (final f in _tokenToFile.values) {
       try {
