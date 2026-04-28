@@ -2,17 +2,21 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:aikomate_flutter/core/config/env.dart';
+import 'package:aikomate_flutter/core/api/memory_api.dart';
 import 'package:aikomate_flutter/core/storage/secure_storage.dart';
 import 'package:aikomate_flutter/reusable_widgets/glass.dart';
 
 class HistoryView extends StatefulWidget {
-  final VoidCallback onBack;
-
   const HistoryView({
     super.key,
     required this.onBack,
+    this.templateId,
   });
+
+  final VoidCallback onBack;
+
+  /// When set, scopes `GET`/`DELETE` `/memory/history` to this template.
+  final String? templateId;
 
   @override
   State<HistoryView> createState() => _HistoryViewState();
@@ -47,7 +51,7 @@ class _HistoryViewState extends State<HistoryView> {
 
     try {
       final res = await http.get(
-        Uri.parse("${Env.apiUrl}/memory/history"),
+        memoryHistoryUri(templateId: widget.templateId),
         headers: {"Authorization": "Bearer $token"},
       );
 
@@ -109,7 +113,7 @@ class _HistoryViewState extends State<HistoryView> {
 
     try {
       final res = await http.delete(
-        Uri.parse("${Env.apiUrl}/memory/history"),
+        memoryHistoryUri(templateId: widget.templateId),
         headers: {"Authorization": "Bearer $token"},
       );
 

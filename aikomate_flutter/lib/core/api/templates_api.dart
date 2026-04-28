@@ -231,9 +231,15 @@ Map<String, dynamic> _coverImagePayloadForCreate({
   };
 }
 
+/// Max length for [fishAudioId] on `POST /templates` (Fish voice `reference_id`).
+const templateFishAudioIdMaxLength = 128;
+
 /// Step 3: `POST /templates` after R2 `PUT` succeeds.
 ///
 /// [vrmContentType] should match the presign `fileType` / R2 `PUT` header (optional on server).
+///
+/// [fishAudioId] is optional: Fish Audio voice `reference_id` (same value as WS `fish_audio_id`).
+/// Omit or leave empty to let the server pick a language default for TTS.
 Future<CreateTemplateResult> createTemplate({
   required String name,
   required String title,
@@ -246,35 +252,50 @@ Future<CreateTemplateResult> createTemplate({
   required int coverImageSize,
   String? vrmContentType,
   String? coverImageContentType,
+  String? fishAudioId,
 }) async {
   final headers = await _bearerHeaders();
   if (headers == null) {
     return const CreateTemplateResult(success: false, error: 'Not signed in');
   }
 
+  final fishTrim = fishAudioId?.trim();
+  if (fishTrim != null && fishTrim.length > templateFishAudioIdMaxLength) {
+    return const CreateTemplateResult(
+      success: false,
+      error:
+          'Fish Audio voice id must be at most $templateFishAudioIdMaxLength characters',
+    );
+  }
+
   try {
+    final body = <String, dynamic>{
+      'name': name,
+      'title': title,
+      'description': description,
+      'prompt': prompt,
+      'visibility': visibility,
+      'vrm': _vrmPayloadForCreate(
+        key: vrmTarget.key,
+        fileUrl: vrmTarget.fileUrl,
+        size: vrmSize,
+        contentType: vrmContentType,
+      ),
+      'coverImage': _coverImagePayloadForCreate(
+        key: coverImageTarget.key,
+        fileUrl: coverImageTarget.fileUrl,
+        size: coverImageSize,
+        contentType: coverImageContentType,
+      ),
+    };
+    if (fishTrim != null && fishTrim.isNotEmpty) {
+      body['fishAudioId'] = fishTrim;
+    }
+
     final res = await http.post(
       Uri.parse('${Env.apiUrl}/templates'),
       headers: headers,
-      body: jsonEncode({
-        'name': name,
-        'title': title,
-        'description': description,
-        'prompt': prompt,
-        'visibility': visibility,
-        'vrm': _vrmPayloadForCreate(
-          key: vrmTarget.key,
-          fileUrl: vrmTarget.fileUrl,
-          size: vrmSize,
-          contentType: vrmContentType,
-        ),
-        'coverImage': _coverImagePayloadForCreate(
-          key: coverImageTarget.key,
-          fileUrl: coverImageTarget.fileUrl,
-          size: coverImageSize,
-          contentType: coverImageContentType,
-        ),
-      }),
+      body: jsonEncode(body),
     );
 
     final data = _asJsonMap(_decodeJsonBody(res.body)) ?? <String, dynamic>{};
@@ -391,6 +412,17 @@ Future<TemplatesJsonResult> getPublicTemplates({int? page, int? limit}) {
   return _authorizedJson(
     method: 'GET',
     uri: _templatesUri('/templates/public/cards', q.isEmpty ? null : q),
+  );
+}
+
+/// `GET /templates/recents?page=&limit=` — recently used templates for the user.
+Future<TemplatesJsonResult> getTemplateRecents({int? page, int? limit}) {
+  final q = <String, String>{};
+  if (page != null) q['page'] = '$page';
+  if (limit != null) q['limit'] = '$limit';
+  return _authorizedJson(
+    method: 'GET',
+    uri: _templatesUri('/templates/recents', q.isEmpty ? null : q),
   );
 }
 
@@ -561,9 +593,47 @@ class TemplatesListPage {
   }
 }
 
+/// Normalizes a Mongo id from JSON — string, or `{ "$oid": "..." }`.
+String? normalizeMongoId(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is String) {
+    final t = raw.trim();
+    return t.isEmpty ? null : t;
+  }
+  if (raw is Map) {
+    final oid = raw[r'$oid'] ?? raw['oid'];
+    if (oid is String && oid.trim().isNotEmpty) return oid.trim();
+  }
+  return null;
+}
+
+/// Resolves the **template** id from list/detail payload shapes (Discover cards,
+/// recents rows, etc.). Prefer explicit `templateId` / nested `template` over
+/// root `id` when the API uses `id` for a parent document (e.g. a recents entry).
 String? templateIdFromItem(Map<String, dynamic> item) {
-  final id = item['id'] ?? item['_id'];
-  return id?.toString();
+  for (final key in const ['templateId', 'template_id']) {
+    final v = normalizeMongoId(item[key]);
+    if (v != null) return v;
+  }
+
+  final nested = item['template'];
+  if (nested is String) {
+    final v = normalizeMongoId(nested);
+    if (v != null) return v;
+  }
+  if (nested is Map) {
+    final m = Map<String, dynamic>.from(nested);
+    for (final key in const ['id', '_id', 'templateId', 'template_id']) {
+      final v = normalizeMongoId(m[key]);
+      if (v != null) return v;
+    }
+  }
+
+  for (final key in const ['id', '_id']) {
+    final v = normalizeMongoId(item[key]);
+    if (v != null) return v;
+  }
+  return null;
 }
 
 String? vrmFileUrlFromItem(Map<String, dynamic> item) {
@@ -575,6 +645,13 @@ String? vrmFileUrlFromItem(Map<String, dynamic> item) {
 }
 
 String? coverImageUrlFromItem(Map<String, dynamic> item) {
+  final direct =
+      item['coverImageFileUrl'] ??
+      item['cover_image_file_url'] ??
+      item['coverUrl'] ??
+      item['cover_url'];
+  if (direct is String && direct.isNotEmpty) return direct;
+
   final cover = item['coverImage'];
   if (cover is Map) {
     final m = Map<String, dynamic>.from(cover);
@@ -583,4 +660,18 @@ String? coverImageUrlFromItem(Map<String, dynamic> item) {
   }
   if (cover is String && cover.isNotEmpty) return cover;
   return null;
+}
+
+String? fishAudioIdFromMap(Map<String, dynamic> map) {
+  final v = map['fishAudioId'] ?? map['fish_audio_id'];
+  final s = v?.toString().trim();
+  if (s == null || s.isEmpty) return null;
+  return s;
+}
+
+DateTime? lastUsedAtFromItem(Map<String, dynamic> item) {
+  final v = item['lastUsedAt'] ?? item['last_used_at'];
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  return DateTime.tryParse(v.toString());
 }

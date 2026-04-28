@@ -22,6 +22,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   final _titleController = TextEditingController();
   final _promptController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _fishAudioIdController = TextEditingController();
 
   PlatformFile? _vrmFile;
   PlatformFile? _coverImageFile;
@@ -35,6 +36,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     _titleController.dispose();
     _promptController.dispose();
     _descriptionController.dispose();
+    _fishAudioIdController.dispose();
     super.dispose();
   }
 
@@ -66,6 +68,14 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     }
     if (prompt.isEmpty) {
       setState(() => _error = 'Enter a personality prompt.');
+      return;
+    }
+    final fishAudioIdTrim = _fishAudioIdController.text.trim();
+    if (fishAudioIdTrim.length > templateFishAudioIdMaxLength) {
+      setState(
+        () => _error =
+            'Fish Audio voice id must be at most $templateFishAudioIdMaxLength characters.',
+      );
       return;
     }
     if (_vrmFile == null) {
@@ -187,6 +197,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       coverImageSize: convertedCover.bytes.length,
       vrmContentType: _vrmFileType,
       coverImageContentType: coverContentType,
+      fishAudioId: fishAudioIdTrim.isEmpty ? null : fishAudioIdTrim,
     );
 
     if (!mounted) return;
@@ -332,6 +343,20 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                 alignLabelWithHint: true,
               ),
               maxLines: 2,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _fishAudioIdController,
+              decoration: const InputDecoration(
+                labelText: 'Fish Audio voice id (optional)',
+                hintText: 'Voice reference_id — same as chat fish_audio_id',
+                border: OutlineInputBorder(),
+                helperText:
+                    'Up to $templateFishAudioIdMaxLength characters. Leave empty to use the server default voice for your language.',
+              ),
+              maxLength: templateFishAudioIdMaxLength,
+              autocorrect: false,
+              enableSuggestions: false,
             ),
             const SizedBox(height: 20),
             ListTile(

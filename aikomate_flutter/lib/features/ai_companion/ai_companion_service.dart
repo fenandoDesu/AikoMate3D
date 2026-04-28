@@ -33,6 +33,15 @@ class AiCompanionService {
   /// Template / persona instructions; sent as `prompt` when non-empty.
   final String? personalityPrompt;
 
+  /// Mongo template id; sent as `template_id` on each message when set.
+  final String? templateId;
+
+  /// Optional Fish voice override; when null with [templateId], `fish_audio_id` is omitted.
+  final String? fishAudioId;
+
+  static const _legacyDefaultFishAudioId =
+      'a2fcdd688eed4521baf39ffc05ca7d3f';
+
   WebSocketChannel? _channel;
   StreamSubscription? _wsSubscription;
   Future<void>? _connectionFuture;
@@ -55,6 +64,8 @@ class AiCompanionService {
     this.avatarName = "Haruna",
     this.userName = "Fernando",
     this.personalityPrompt,
+    this.templateId,
+    this.fishAudioId,
   }) {
     _playerSubscription = _player.onPlayerComplete.listen(
       (_) => _handlePlaybackComplete(),
@@ -92,16 +103,27 @@ class AiCompanionService {
     if (_channel == null) {
       throw StateError("WebSocket not available");
     }
-    final fishAudioId = "a2fcdd688eed4521baf39ffc05ca7d3f";
-
     final payloadMap = <String, dynamic>{
       "text": text,
+      "user_prompt": text,
       "language": language,
       "avatar_name": avatarName,
       "user_name": userName,
-      "fish_audio_id": fishAudioId,
       "intimacy": intimacy.value.clamp(0, 5),
     };
+
+    final tid = templateId?.trim();
+    if (tid != null && tid.isNotEmpty) {
+      payloadMap["template_id"] = tid;
+    }
+
+    final fid = fishAudioId?.trim();
+    if (fid != null && fid.isNotEmpty) {
+      payloadMap["fish_audio_id"] = fid;
+    } else if (tid == null || tid.isEmpty) {
+      payloadMap["fish_audio_id"] = _legacyDefaultFishAudioId;
+    }
+
     final p = personalityPrompt?.trim();
     if (p != null && p.isNotEmpty) {
       payloadMap["prompt"] = p;
@@ -209,6 +231,10 @@ class AiCompanionService {
         _streamEnded = true;
         _flushPendingAudio();
         _maybeEndSpeech();
+        final t = templateId?.trim();
+        if (t != null && t.isNotEmpty) {
+          _emitEvent({'event': 'companion_turn_end'});
+        }
         break;
       case "intimacy_update":
         final raw = message["intimacy"];
@@ -220,7 +246,22 @@ class AiCompanionService {
         }
         break;
       case "error":
-        _logController.add("Server error: ${message["message"]}");
+        final code = message["code"]?.toString();
+        final msgRaw = message["message"] ?? message["detail"];
+        final msg = msgRaw is String ? msgRaw : msgRaw?.toString();
+        _logController.add("Server error: ${msg ?? code ?? message}");
+        if (code == "INVALID_TEMPLATE_ID" ||
+            code == "TEMPLATE_NOT_ACCESSIBLE") {
+          _emitEvent({
+            "event": "companion_socket_error",
+            "code": code,
+            "message":
+                msg ??
+                (code == "INVALID_TEMPLATE_ID"
+                    ? "Invalid character."
+                    : "This character is not available."),
+          });
+        }
         _pendingAudio.clear();
         _audioQueue.clear();
         _audioDurationQueue.clear();

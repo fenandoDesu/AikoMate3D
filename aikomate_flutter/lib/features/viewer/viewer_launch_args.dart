@@ -6,6 +6,7 @@ class ViewerLaunchArgs {
     this.templateId,
     this.personalityPrompt,
     this.userName,
+    this.fishAudioId,
   });
 
   /// Public HTTPS URL of the `.vrm` file (R2 / CDN).
@@ -22,4 +23,7 @@ class ViewerLaunchArgs {
 
   /// Logged-in display name for `user_name`; falls back in [ViewerScreen].
   final String? userName;
+
+  /// Fish Audio voice id override for the companion WS; omit on server when null.
+  final String? fishAudioId;
 }

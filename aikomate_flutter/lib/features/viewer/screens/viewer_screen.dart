@@ -6,6 +6,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:aikomate_flutter/features/ai_companion/ai_companion_service.dart';
+import 'package:aikomate_flutter/core/api/chat_api.dart';
 import 'package:aikomate_flutter/core/config/env.dart';
 import 'package:aikomate_flutter/core/auth/google_sign_in_service.dart';
 import 'package:aikomate_flutter/core/storage/secure_storage.dart';
@@ -53,6 +54,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   String _statusLabel = '';
   final List<Map<String, dynamic>> _pendingWebEvents = [];
   int? _petPointerId;
+  List<String> _replySuggestions = [];
+  bool _loadingSuggestions = false;
 
   final UserBackgroundLoopback _userBackgroundLoopback =
       UserBackgroundLoopback();
@@ -78,6 +81,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
               ? a!.userName!.trim()
               : 'Fernando',
       personalityPrompt: a?.personalityPrompt,
+      templateId: a?.templateId,
+      fishAudioId: a?.fishAudioId,
     );
     _logSubscription = _aiService.logStream.listen((message) {
       if (!mounted) return;
@@ -85,9 +90,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
         _statusLabel = message;
       });
     });
-    _eventSubscription = _aiService.eventStream.listen((event) {
-      _queueWebEvent(event);
-    });
+    _eventSubscription = _aiService.eventStream.listen(_handleCompanionStreamEvent);
     _aiService.ensureConnected().catchError((error) {
       if (!mounted) return;
       setState(() {
@@ -223,6 +226,43 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   bool get _petInputEnabled => !_showOptions;
+
+  void _handleCompanionStreamEvent(Map<String, dynamic> event) {
+    final ev = event['event']?.toString();
+    if (ev == 'companion_socket_error') {
+      final msg = event['message']?.toString() ?? 'Companion error';
+      if (!mounted) return;
+      setState(() => _statusLabel = msg);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+      return;
+    }
+    if (ev == 'companion_turn_end') {
+      final tid = widget.launchArgs?.templateId;
+      if (tid == null || tid.isEmpty) return;
+      unawaited(_fetchReplySuggestions(tid));
+      return;
+    }
+    _queueWebEvent(event);
+  }
+
+  Future<void> _fetchReplySuggestions(String templateId) async {
+    if (!mounted) return;
+    setState(() {
+      _loadingSuggestions = true;
+      _replySuggestions = [];
+    });
+    final r = await postChatSuggestions(
+      templateId: templateId,
+      language: _speechLanguage,
+    );
+    if (!mounted) return;
+    setState(() {
+      _loadingSuggestions = false;
+      _replySuggestions = r.success ? r.suggestions : const [];
+    });
+  }
 
   void _onPetPointerDown(PointerDownEvent event) {
     if (!_petInputEnabled || _petPointerId != null) return;
@@ -408,6 +448,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
     if (mounted) {
       setState(() {
         _statusLabel = 'Sending...';
+        _replySuggestions = [];
+        _loadingSuggestions = false;
       });
     }
 
@@ -644,6 +686,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
           onBack: () {
             setState(() => _overlayView = OverlayView.menu);
           },
+          templateId: widget.launchArgs?.templateId,
         );
       case OverlayView.background:
         return BackgroundView(
@@ -817,6 +860,66 @@ class _ViewerScreenState extends State<ViewerScreen> {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          if (widget.launchArgs?.templateId != null &&
+                              (_replySuggestions.isNotEmpty ||
+                                  _loadingSuggestions)) ...[
+                            if (_loadingSuggestions)
+                              const Padding(
+                                padding: EdgeInsets.only(bottom: 8),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    children: [
+                                      for (final s in _replySuggestions)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            right: 8,
+                                          ),
+                                          child: TextButton(
+                                            style: TextButton.styleFrom(
+                                              foregroundColor: Colors.white,
+                                              backgroundColor: Colors.white24,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 8,
+                                                  ),
+                                            ),
+                                            onPressed: () {
+                                              _messageController.text = s;
+                                              _messageController.selection =
+                                                  TextSelection.collapsed(
+                                                offset: s.length,
+                                              );
+                                              _sendMessageFromText();
+                                            },
+                                            child: Text(
+                                              s,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
                           if (hint.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8.0),
