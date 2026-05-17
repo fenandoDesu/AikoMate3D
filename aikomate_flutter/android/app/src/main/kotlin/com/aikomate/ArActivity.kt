@@ -40,6 +40,7 @@ import okio.ByteString
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -107,7 +108,8 @@ class ArActivity : AppCompatActivity() {
             startSpeechRecognition()
         }
 
-        vrmFactor = detectVrmFactor(modelPathForLogs)
+        vrmFactor = detectVrmFactor(modelPathForLogs, modelUri)
+        Log.d(TAG, "VRM factor for idle animation: $vrmFactor (path=$modelPathForLogs)")
 
         arFragment = obtainArFragment()
         configureArFragment()
@@ -393,36 +395,73 @@ class ArActivity : AppCompatActivity() {
         updateHud(successHud)
     }
 
-    private fun detectVrmFactor(assetPath: String): Float {
+    private fun detectVrmFactor(modelPath: String, modelUri: Uri?): Float {
         return runCatching {
-            assets.open(assetPath).use { input ->
-                val header = ByteArray(12)
-                if (input.read(header) != 12) return@runCatching 1f
-
-                val chunkLenBytes = ByteArray(4)
-                if (input.read(chunkLenBytes) != 4) return@runCatching 1f
-                val chunkLen =
-                    (chunkLenBytes[0].toInt() and 0xFF) or
-                        ((chunkLenBytes[1].toInt() and 0xFF) shl 8) or
-                        ((chunkLenBytes[2].toInt() and 0xFF) shl 16) or
-                        ((chunkLenBytes[3].toInt() and 0xFF) shl 24)
-
-                if (input.skip(4) != 4L) return@runCatching 1f // chunk type
-
-                val jsonBytes = ByteArray(chunkLen)
-                val read = input.read(jsonBytes)
-                if (read <= 0) return@runCatching 1f
-
-                val json = String(jsonBytes, Charsets.UTF_8)
-                when {
-                    json.contains("VRMC_vrm") -> 1f
-                    json.contains("\"VRM\"") -> -1f
-                    else -> 1f
-                }
-            }
+            openModelInputStream(modelPath, modelUri)?.use { input ->
+                parseVrmFactorFromGlb(input)
+            } ?: 1f
         }.getOrElse {
             Log.w(TAG, "Could not detect VRM version, defaulting factor=1: ${it.message}")
             1f
+        }
+    }
+
+    private fun openModelInputStream(modelPath: String, modelUri: Uri?): InputStream? {
+        if (modelPath.isEmpty() && modelUri == null) return null
+
+        modelUri?.let { uri ->
+            when (uri.scheme?.lowercase()) {
+                "file" -> {
+                    val path = uri.path.orEmpty()
+                    if (path.isNotEmpty()) {
+                        val file = File(path)
+                        if (file.isFile) return file.inputStream()
+                    }
+                }
+                "content" -> return contentResolver.openInputStream(uri)
+            }
+        }
+
+        if (modelPath.isNotEmpty()) {
+            val file = File(modelPath)
+            if (file.isFile) return file.inputStream()
+
+            // Bundled Flutter asset paths (not used for typical downloaded avatars).
+            return runCatching {
+                val assetPath = modelPath
+                    .removePrefix("flutter_assets/")
+                    .removePrefix("/")
+                assets.open(assetPath)
+            }.getOrNull()
+        }
+
+        return null
+    }
+
+    /** VRM1 => 1, VRM0 => -1 (X/Z euler signs differ from VRM1). */
+    private fun parseVrmFactorFromGlb(input: InputStream): Float {
+        val header = ByteArray(12)
+        if (input.read(header) != 12) return 1f
+
+        val chunkLenBytes = ByteArray(4)
+        if (input.read(chunkLenBytes) != 4) return 1f
+        val chunkLen =
+            (chunkLenBytes[0].toInt() and 0xFF) or
+                ((chunkLenBytes[1].toInt() and 0xFF) shl 8) or
+                ((chunkLenBytes[2].toInt() and 0xFF) shl 16) or
+                ((chunkLenBytes[3].toInt() and 0xFF) shl 24)
+
+        if (input.skip(4) != 4L) return 1f // chunk type
+
+        val jsonBytes = ByteArray(chunkLen)
+        val read = input.read(jsonBytes)
+        if (read <= 0) return 1f
+
+        val json = String(jsonBytes, Charsets.UTF_8)
+        return when {
+            json.contains("VRMC_vrm") -> 1f
+            json.contains("\"VRM\"") -> -1f
+            else -> 1f
         }
     }
 
